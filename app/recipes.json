@@ -1,0 +1,125 @@
+[
+  {
+    "id": "grilled_chicken_salad",
+    "name": "Gegrilde kip met salade",
+    "tags": ["chicken", "high-protein", "low-carb", "mediterranean"],
+    "allergens": [],
+    "nutrition": {"protein": 42, "carbs": 18, "calories": 520},
+    "ingredients": [
+      {"name": "kipfilet", "quantity": 600, "unit": "g"},
+      {"name": "gemengde sla", "quantity": 2, "unit": "zak"},
+      {"name": "komkommer", "quantity": 1, "unit": "stuk"},
+      {"name": "olijfolie", "quantity": 3, "unit": "el"}
+    ]
+  },
+  {
+    "id": "salmon_broccoli",
+    "name": "Zalm met broccoli en citroen",
+    "tags": ["fish", "high-protein", "low-carb"],
+    "allergens": ["fish"],
+    "nutrition": {"protein": 38, "carbs": 12, "calories": 480},
+    "ingredients": [
+      {"name": "zalmfilet", "quantity": 700, "unit": "g"},
+      {"name": "broccoli", "quantity": 2, "unit": "stronk"},
+      {"name": "citroen", "quantity": 1, "unit": "stuk"}
+    ]
+  },
+  {
+    "id": "turkey_stir_fry",
+    "name": "Kalkoen roerbak met groenten",
+    "tags": ["asian", "high-protein", "low-carb"],
+    "allergens": ["soy"],
+    "nutrition": {"protein": 45, "carbs": 22, "calories": 510},
+    "ingredients": [
+      {"name": "kalkoenreepjes", "quantity": 650, "unit": "g"},
+      {"name": "paprika mix", "quantity": 3, "unit": "stuk"},
+      {"name": "sojasaus", "quantity": 5, "unit": "el"}
+    ]
+  },
+  {
+    "id": "beef_zoodles",
+    "name": "Runderreepjes met courgetti",
+    "tags": ["high-protein", "low-carb"],
+    "allergens": [],
+    "nutrition": {"protein": 40, "carbs": 16, "calories": 530},
+    "ingredients": [
+      {"name": "runderreepjes", "quantity": 700, "unit": "g"},
+      {"name": "courgette", "quantity": 5, "unit": "stuk"},
+      {"name": "knoflook", "quantity": 3, "unit": "teentje"}
+    ]
+  },
+  {
+    "id": "lentil_chicken_soup",
+    "name": "Linzensoep met kip",
+    "tags": ["chicken", "high-protein"],
+    "allergens": [],
+    "nutrition": {"protein": 33, "carbs": 35, "calories": 550},
+    "ingredients": [
+      {"name": "kipdijfilet", "quantity": 500, "unit": "g"},
+      {"name": "linzen", "quantity": 350, "unit": "g"},
+      {"name": "wortel", "quantity": 4, "unit": "stuk"}
+    ]
+  },
+  {
+    "id": "cod_spinach",
+    "name": "Kabeljauw met spinazie",
+    "tags": ["fish", "high-protein", "low-carb"],
+    "allergens": ["fish"],
+    "nutrition": {"protein": 41, "carbs": 10, "calories": 430},
+    "ingredients": [
+      {"name": "kabeljauwfilet", "quantity": 700, "unit": "g"},
+      {"name": "spinazie", "quantity": 800, "unit": "g"},
+      {"name": "cherrytomaten", "quantity": 300, "unit": "g"}
+    ]
+  },
+  {
+    "id": "chicken_pasta",
+    "name": "Volkoren pasta met kip en tomaat",
+    "tags": ["chicken", "high-protein", "balanced-carb", "mediterranean"],
+    "allergens": ["gluten"],
+    "nutrition": {"protein": 36, "carbs": 47, "calories": 640},
+    "ingredients": [
+      {"name": "volkoren pasta", "quantity": 420, "unit": "g"},
+      {"name": "kipfilet", "quantity": 550, "unit": "g"},
+      {"name": "tomatensaus", "quantity": 500, "unit": "ml"}
+    ]
+  },
+  {
+    "id": "beef_rice_bowl",
+    "name": "Rijstbowl met rund en groenten",
+    "tags": ["asian", "high-protein", "balanced-carb"],
+    "allergens": [],
+    "nutrition": {"protein": 34, "carbs": 52, "calories": 670},
+    "ingredients": [
+      {"name": "jasmijnrijst", "quantity": 400, "unit": "g"},
+      {"name": "runderreepjes", "quantity": 600, "unit": "g"},
+      {"name": "roerbakgroenten", "quantity": 700, "unit": "g"}
+    ]
+  },
+  {
+    "id": "baked_potato_cod",
+    "name": "Kabeljauw met krieltjes en boontjes",
+    "tags": ["fish", "high-protein", "balanced-carb"],
+    "allergens": ["fish"],
+    "nutrition": {"protein": 38, "carbs": 44, "calories": 610},
+    "ingredients": [
+      {"name": "kabeljauwfilet", "quantity": 700, "unit": "g"},
+      {"name": "krieltjes", "quantity": 900, "unit": "g"},
+      {"name": "sperziebonen", "quantity": 500, "unit": "g"}
+    ]
+  },
+  {
+    "id": "spaghetti_bolognaise",
+    "name": "Spaghetti bolognaise",
+    "tags": ["pasta", "balanced-carb", "heavy", "favorite"],
+    "rotation_limit": "1_per_month",
+    "allergens": ["gluten"],
+    "nutrition": {"protein": 32, "carbs": 68, "calories": 760},
+    "ingredients": [
+      {"name": "spaghetti", "quantity": 450, "unit": "g"},
+      {"name": "rundergehakt", "quantity": 650, "unit": "g"},
+      {"name": "tomatensaus", "quantity": 650, "unit": "ml"},
+      {"name": "ui", "quantity": 2, "unit": "stuk"}
+    ]
+  }
+]

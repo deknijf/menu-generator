@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ recipe.name }} · Meal Planner</title>
+  <link rel="stylesheet" href="/static/styles.css?v=20260208v" />
+</head>
+<body class="detail-page">
+  <main class="detail-shell">
+    <header class="card detail-top">
+      <a href="/" class="btn">Terug naar planner</a>
+      <div class="detail-top-actions">
+        <button
+          id="detail-edit-btn"
+          class="btn btn-primary"
+          type="button"
+          {% if not editable %}disabled title="Alleen eigen gerechten zijn bewerkbaar"{% endif %}
+        >Edit</button>
+        <span class="user-pill">{{ user.name }}</span>
+      </div>
+    </header>
+
+    <form id="detail-form" class="detail-edit-form" data-meal-id="{{ meal_id }}" data-editable="{{ '1' if editable else '0' }}">
+      <section class="card detail-hero">
+        <img id="detail-image" src="{{ meal_image }}" alt="{{ recipe.name }}" onerror="this.onerror=null;this.src='https://images.unsplash.com/photo-1498837167922-ddd27525d352?auto=format&fit=crop&w=1200&q=80';" />
+        <div class="detail-form-grid">
+          <label>Naam <input id="f-name" type="text" value="{{ recipe.name }}" disabled /></label>
+          <label>Beschrijving <input id="f-description" type="text" value="{{ recipe.description or '' }}" disabled /></label>
+          <label>Foto URL <input id="f-image-url" type="url" value="{{ recipe.image_url or '' }}" disabled /></label>
+          <div class="detail-inline">
+            <label>Proteine (g) <input id="f-protein" type="number" min="0" value="{{ recipe.nutrition.protein or 0 }}" disabled /></label>
+            <label>Koolhydraten (g) <input id="f-carbs" type="number" min="0" value="{{ recipe.nutrition.carbs or 0 }}" disabled /></label>
+            <label>Calorieen <input id="f-calories" type="number" min="0" value="{{ recipe.nutrition.calories or 0 }}" disabled /></label>
+          </div>
+          <div class="detail-inline">
+            <label>Tags (komma) <input id="f-tags" type="text" value="{{ (recipe.tags or [])|join(', ') }}" disabled /></label>
+            <label>Allergenen (komma) <input id="f-allergens" type="text" value="{{ (recipe.allergens or [])|join(', ') }}" disabled /></label>
+            <label>Rotatiefrequentie
+              <select id="f-rotation" disabled>
+                <option value="2_per_week" {% if recipe.rotation_limit == '2_per_week' %}selected{% endif %}>2 keer per week</option>
+                <option value="1_per_week" {% if recipe.rotation_limit == '1_per_week' %}selected{% endif %}>1 keer per week</option>
+                <option value="1_per_month" {% if recipe.rotation_limit == '1_per_month' %}selected{% endif %}>1 keer per maand</option>
+              </select>
+            </label>
+          </div>
+          {% if date_label %}
+            <p class="muted">Gepland op: {{ date_label }}</p>
+          {% endif %}
+          <p class="muted">Voor {{ person_count }} personen</p>
+          <span id="detail-save-status" class="muted"></span>
+        </div>
+      </section>
+
+      <section class="detail-grid">
+        <article class="card detail-card">
+          <h3>Ingredienten en details</h3>
+          <textarea id="f-ingredients" rows="10" disabled>{% for ing in recipe.ingredients or [] %}{{ ing.name }}, {{ ing.quantity }}, {{ ing.unit }}{% if not loop.last %}
+{% endif %}{% endfor %}</textarea>
+        </article>
+
+        <article class="card detail-card">
+          <h3>Bereidingswijze</h3>
+          <textarea id="f-preparation" rows="10" disabled>{% for step in steps %}{{ step }}{% if not loop.last %}
+{% endif %}{% endfor %}</textarea>
+        </article>
+      </section>
+    </form>
+  </main>
+
+  <script>
+    (function () {
+      const form = document.getElementById("detail-form");
+      const editBtn = document.getElementById("detail-edit-btn");
+      const status = document.getElementById("detail-save-status");
+      const image = document.getElementById("detail-image");
+      const imageUrlInput = document.getElementById("f-image-url");
+      if (!form || !editBtn) return;
+
+      const editable = form.dataset.editable === "1";
+      let editing = false;
+
+      function splitCsv(value) {
+        return (value || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+      }
+
+      function parseIngredients(text) {
+        return (text || "")
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => {
+            const parts = line.split(",").map((x) => x.trim());
+            return {
+              name: parts[0] || "",
+              quantity: Number(parts[1] || 0),
+              unit: parts[2] || "",
+            };
+          })
+          .filter((x) => x.name);
+      }
+
+      function splitLines(text) {
+        return (text || "").split("\n").map((x) => x.trim()).filter(Boolean);
+      }
+
+      function setEditing(next) {
+        editing = next;
+        const fields = form.querySelectorAll("input, textarea, select");
+        fields.forEach((field) => {
+          field.disabled = !editing;
+        });
+        editBtn.textContent = editing ? "Save" : "Edit";
+      }
+
+      imageUrlInput.addEventListener("input", () => {
+        const value = imageUrlInput.value.trim();
+        if (value) image.src = value;
+      });
+
+      editBtn.addEventListener("click", async () => {
+        if (!editable) return;
+        if (!editing) {
+          setEditing(true);
+          return;
+        }
+
+        const payload = {
+          name: document.getElementById("f-name").value.trim(),
+          description: document.getElementById("f-description").value.trim(),
+          image_url: document.getElementById("f-image-url").value.trim(),
+          protein: Number(document.getElementById("f-protein").value || 0),
+          carbs: Number(document.getElementById("f-carbs").value || 0),
+          calories: Number(document.getElementById("f-calories").value || 0),
+          tags: splitCsv(document.getElementById("f-tags").value),
+          allergens: splitCsv(document.getElementById("f-allergens").value),
+          ingredients: parseIngredients(document.getElementById("f-ingredients").value),
+          preparation: splitLines(document.getElementById("f-preparation").value),
+          rotation_limit: document.getElementById("f-rotation").value,
+        };
+
+        const res = await fetch(`/api/custom-meals/${encodeURIComponent(form.dataset.mealId)}`, {
+          method: "PUT",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+          status.textContent = "Opslaan mislukt.";
+          return;
+        }
+
+        status.textContent = "Opgeslagen.";
+        setEditing(false);
+        setTimeout(() => { status.textContent = ""; }, 1500);
+      });
+    })();
+  </script>
+</body>
+</html>

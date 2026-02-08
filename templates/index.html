@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Meal Planner</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="/static/styles.css?v=20260208v" />
+</head>
+<body>
+  <div class="app-layout">
+    <aside class="sidebar">
+      <div class="brand-block">
+        <img src="/static/logo-mark.svg" alt="Meal Planner logo" class="brand-logo" />
+        <p class="brand-name">Meal Planner</p>
+      </div>
+      <nav class="sidebar-nav">
+        <button class="tab side-item active" data-tab="dashboard" type="button">
+          <span class="side-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M4 10.5L12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-5H10v5H5a1 1 0 0 1-1-1z"/></svg>
+          </span>
+          <span class="side-label">Dashboard</span>
+        </button>
+        <button class="tab side-item" data-tab="planner" type="button">
+          <span class="side-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>
+          </span>
+          <span class="side-label">Planner</span>
+        </button>
+        <button class="tab side-item" data-tab="shopping" type="button">
+          <span class="side-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M6 6h14l-2 8H8L6 6z"/><path d="M6 6L5 3H3"/><circle cx="9" cy="18" r="1.6"/><circle cx="17" cy="18" r="1.6"/></svg>
+          </span>
+          <span class="side-label">Boodschappen</span>
+        </button>
+        <button class="tab side-item" data-tab="my-meals" type="button">
+          <span class="side-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="4.2"/>
+              <path d="M12 4.2a7.8 7.8 0 0 1 5.9 2.7"/>
+              <path d="M12 19.8a7.8 7.8 0 0 1-5.9-2.7"/>
+              <path d="M3.8 4.5v8.5"/>
+              <path d="M2.5 4.5v4.5M5.1 4.5v4.5"/>
+              <path d="M3.8 13v6.5"/>
+              <path d="M20.2 4.5v15"/>
+              <path d="M20.2 4.5c-1.8 0-3.3 1.5-3.3 3.3V13"/>
+            </svg>
+          </span>
+          <span class="side-label">Mijn maaltijden</span>
+        </button>
+        <button class="tab side-item" data-tab="profile" type="button">
+          <span class="side-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="3.4"/><path d="M5 20a7 7 0 0 1 14 0"/></svg>
+          </span>
+          <span class="side-label">Profiel</span>
+        </button>
+      </nav>
+      <div class="sidebar-foot">
+        <button id="sidebar-toggle" class="side-item side-toggle" type="button" aria-pressed="false">
+          <span class="side-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <rect x="2.5" y="3" width="19" height="18" rx="3"/>
+              <path d="M8 4.5v15"/>
+              <path class="toggle-arrow" d="M14.5 8.5l-3.5 3.5 3.5 3.5"/>
+            </svg>
+          </span>
+          <span id="sidebar-toggle-text" class="side-label">Inklappen</span>
+        </button>
+        <a class="side-item side-logout" href="/logout">
+          <span class="side-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M10 4h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-8"/><path d="M13 12H4"/><path d="M8 8l-4 4 4 4"/></svg>
+          </span>
+          <span class="side-label">Uitloggen</span>
+        </a>
+      </div>
+    </aside>
+
+    <main class="main-shell">
+      <header class="topbar card">
+        <div class="topbar-actions">
+          <div class="topbar-brand">
+            <img class="topbar-brand-icon" src="/static/logo-mark.svg" alt="Meal Planner logo" />
+            <span class="topbar-brand-text">
+              <span class="brand-meal">Meal</span>
+              <span class="brand-planner">Planner</span>
+            </span>
+          </div>
+          <a id="user-info" class="user-pill user-link" href="#profile"></a>
+        </div>
+      </header>
+
+      <section id="tab-dashboard" class="tab-panel active">
+        <section class="dashboard-grid-main">
+          <article class="hero card">
+            <div>
+              <p class="eyebrow">Slim weekmenu</p>
+              <h2>Goed eten begint met een slim plan.</h2>
+              <p class="muted">Ontdek hoe eenvoudig het is om gevarieerd, gezond en efficient te eten.</p>
+              <div class="hero-actions">
+                <button class="btn btn-primary" id="hero-generate-btn" type="button">Genereer menu</button>
+                <button class="btn btn-ghost" id="hero-shopping-btn" type="button">Open boodschappen</button>
+              </div>
+            </div>
+            <img class="hero-image" src="https://images.unsplash.com/photo-1540189549336-e6e99c3679fe?auto=format&fit=crop&w=900&q=80" alt="Menu inspiratie" />
+          </article>
+
+          <aside class="side-card card">
+            <div class="side-card-head">
+              <h3>Boodschappenlijst</h3>
+              <button class="btn btn-primary" id="shopping-btn" type="button">Update</button>
+            </div>
+            <ul id="side-shopping-list" class="mini-list"></ul>
+          </aside>
+        </section>
+
+        <section class="metric-row">
+          <article class="metric card"><p class="metric-label">Kookdagen</p><p class="metric-value" id="metric-cook-days">0</p></article>
+          <article class="metric card"><p class="metric-label">Rustdagen</p><p class="metric-value" id="metric-skip-days">0</p></article>
+          <article class="metric card"><p class="metric-label">Gepland</p><p class="metric-value" id="metric-planned">0</p></article>
+          <article class="metric card"><p class="metric-label">Vismaaltijden</p><p class="metric-value" id="metric-fish">0</p></article>
+        </section>
+
+        <section class="card progress-card">
+          <div>
+            <h3>Periode-overzicht</h3>
+            <p id="range-preview" class="muted"></p>
+          </div>
+          <div class="progress-wrap">
+            <p class="progress-value" id="metric-completion">0%</p>
+            <div class="progress-track"><span id="completion-bar"></span></div>
+          </div>
+        </section>
+
+        <section class="card menu-preview-card">
+          <h3>Menu-overzicht</h3>
+          <div id="menu-gallery" class="menu-gallery"></div>
+        </section>
+      </section>
+
+      <section id="tab-planner" class="tab-panel">
+        <section class="planner-layout">
+          <section class="card controls planner-settings-hero">
+            <h3>Planner instellingen</h3>
+            <div class="form-grid">
+              <label>Van <input type="date" id="start-date" /></label>
+              <label>Tot <input type="date" id="end-date" /></label>
+            </div>
+
+            <div class="toggle-list">
+              <label class="checkline"><input type="checkbox" id="opt-fish" /> <span>Voeg extra vis toe</span></label>
+              <label class="checkline"><input type="checkbox" id="opt-protein" checked /> <span>Meer proteinen</span></label>
+              <label class="checkline"><input type="checkbox" id="opt-low-carb" checked /> <span>Minder koolhydraten</span></label>
+            </div>
+
+            <div class="form-grid single">
+              <label>Aantal personen
+                <select id="person-count">
+                  <option value="1">1 persoon</option>
+                  <option value="2" selected>2 personen</option>
+                  <option value="3">3 personen</option>
+                  <option value="4">4 personen</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="button-row">
+              <button id="generate-btn" class="btn btn-primary" type="button">Genereer maaltijden</button>
+            </div>
+          </section>
+
+          <section class="card">
+            <h3>Kalender (start op maandag)</h3>
+            <p class="muted">Klik op een dag om koken aan/uit te zetten. Gebruik Opnieuw voor een alternatief gerecht.</p>
+            <div id="calendar" class="calendar"></div>
+          </section>
+        </section>
+
+        <section class="card planned-meals-panel">
+          <h3>Geplande maaltijden</h3>
+          <ul id="plan-list" class="list-plain"></ul>
+        </section>
+      </section>
+
+      <section id="tab-shopping" class="tab-panel">
+        <section class="card">
+          <div class="side-card-head">
+            <h3>Boodschappenlijst</h3>
+            <button class="mini-link" id="shopping-refresh-btn" type="button">Refresh</button>
+          </div>
+          <div class="shopping-tools">
+            <input type="text" id="extra-item-name" placeholder="Extra item (bv. water)" />
+            <input type="number" id="extra-item-qty" min="0" step="0.1" placeholder="Hoeveelheid" />
+            <input type="text" id="extra-item-unit" placeholder="Unit (bv. l, stuk)" />
+            <button id="add-extra-item-btn" class="btn btn-primary" type="button">Voeg toe</button>
+          </div>
+          <ul id="shopping-list" class="shopping-list"></ul>
+        </section>
+      </section>
+
+      <section id="tab-my-meals" class="tab-panel">
+        <section class="planner-layout">
+          <section class="card controls custom-meal-form">
+            <h3>Nieuwe maaltijd</h3>
+            <div class="form-grid single">
+              <label>Naam <input type="text" id="cm-name" placeholder="bv. Kabeljauw met puree" /></label>
+            </div>
+            <div class="form-grid single">
+              <label>Beschrijving <input type="text" id="cm-description" placeholder="korte omschrijving" /></label>
+            </div>
+            <div class="form-grid single">
+              <label>Foto</label>
+              <div class="upload-row">
+                <input type="file" id="cm-image-file" accept="image/*" hidden />
+                <input type="hidden" id="cm-image-url" />
+                <button id="cm-upload-btn" class="btn btn-primary" type="button">Upload</button>
+                <span id="cm-image-filename" class="muted">Geen bestand gekozen</span>
+              </div>
+            </div>
+            <div class="form-grid single">
+              <label>Proteine (g) <input type="number" id="cm-protein" min="0" value="30" /></label>
+            </div>
+            <div class="form-grid single">
+              <label>Koolhydraten (g) <input type="number" id="cm-carbs" min="0" value="20" /></label>
+            </div>
+            <div class="form-grid single">
+              <label>Calorieen <input type="number" id="cm-calories" min="0" value="500" /></label>
+            </div>
+            <div class="form-grid single">
+              <label>Tags (komma) <input type="text" id="cm-tags" placeholder="fish, high-protein, low-carb" /></label>
+            </div>
+            <div class="form-grid single">
+              <label>Allergenen (komma) <input type="text" id="cm-allergens" placeholder="fish, lactose" /></label>
+            </div>
+            <div class="form-grid single">
+              <label>Ingredienten (1 per lijn: naam, hoeveelheid, unit)</label>
+              <textarea id="cm-ingredients" rows="5" placeholder="kabeljauw, 700, g&#10;spinazie, 800, g"></textarea>
+            </div>
+            <div class="form-grid single">
+              <label>Bereidingswijze (1 stap per lijn)</label>
+              <textarea id="cm-preparation" rows="5" placeholder="Kruid de vis met peper en zout&#10;Bak de vis 8 minuten&#10;Serveer met groenten"></textarea>
+            </div>
+            <div class="form-grid single">
+              <label>Max rotatiefrequentie
+                <select id="cm-rotation-limit">
+                  <option value="2_per_week">2 keer per week</option>
+                  <option value="1_per_week" selected>1 keer per week</option>
+                  <option value="1_per_month">1 keer per maand</option>
+                </select>
+              </label>
+            </div>
+            <div class="button-row">
+              <button id="cm-save-btn" class="btn btn-primary" type="button">Opslaan maaltijd</button>
+              <span id="cm-save-status" class="muted"></span>
+            </div>
+          </section>
+
+          <section class="card my-meals-panel">
+            <div class="my-meals-head">
+              <h3>Mijn maaltijden</h3>
+              <div class="my-meals-actions">
+                <button id="cm-bulk-toggle-btn" class="btn btn-primary" type="button">Bulk upload</button>
+                <button id="cm-delete-btn" class="btn btn-primary" type="button" disabled>Verwijder</button>
+              </div>
+            </div>
+            <section id="cm-bulk-panel" class="bulk-panel" hidden>
+              <p class="muted"><strong>Template (JSON):</strong> plak een lijst van gerechten. Elk gerecht bevat minstens <code>name</code>, <code>ingredients</code> en optioneel <code>preparation</code>, <code>tags</code>, <code>allergens</code>, <code>protein</code>, <code>carbs</code>, <code>calories</code>, <code>rotation_limit</code>.</p>
+              <p class="muted">Voor ingrediënten: <code>[{"name":"kipfilet","quantity":600,"unit":"g"}]</code>. Voor bereiding: <code>["Stap 1", "Stap 2"]</code>.</p>
+              <textarea id="cm-bulk-json" rows="10" spellcheck="false">[
+  {
+    "name": "Kip met groenten",
+    "description": "Snelle doordeweekse maaltijd",
+    "tags": ["chicken", "high-protein"],
+    "allergens": [],
+    "ingredients": [
+      {"name": "kipfilet", "quantity": 600, "unit": "g"},
+      {"name": "broccoli", "quantity": 2, "unit": "stronk"}
+    ],
+    "preparation": [
+      "Kruid de kip en bak goudbruin.",
+      "Stoom de broccoli beetgaar.",
+      "Serveer samen op het bord."
+    ],
+    "protein": 42,
+    "carbs": 14,
+    "calories": 520,
+    "rotation_limit": "1_per_week"
+  }
+]</textarea>
+              <div class="button-row">
+                <button id="cm-bulk-upload-btn" class="btn btn-primary" type="button">Importeer template</button>
+                <span id="cm-bulk-status" class="muted"></span>
+              </div>
+            </section>
+            <div id="custom-meals-list" class="menu-gallery"></div>
+          </section>
+        </section>
+      </section>
+
+      <section id="tab-profile" class="tab-panel">
+        <section class="card">
+          <h3>Profiel en voorkeuren</h3>
+          <div class="profile-grid">
+            <div><p class="key">Ingelogde gebruiker</p><p id="profile-user" class="val">-</p></div>
+            <div><p class="key">Rol</p><p id="profile-role" class="val">-</p></div>
+            <div><p class="key">Admin e-mail</p><p id="profile-admin" class="val">-</p></div>
+            <div><p class="key">Toegelaten accounts</p><p id="profile-allowed" class="val">-</p></div>
+          </div>
+
+          <div class="profile-editor">
+            <h4>Persoonlijke allergieen</h4>
+            <p class="muted">Gescheiden door komma's. Wordt meegenomen in menu-generatie.</p>
+            <textarea id="profile-allergies" rows="3" placeholder="bv. lactose, soy"></textarea>
+
+            <h4 style="margin-top:0.8rem;">Wat eten we graag</h4>
+            <p class="muted">Geef favoriete ingrediënten of keukens op (komma-gescheiden) om de suggesties te sturen.</p>
+            <textarea id="profile-likes" rows="3" placeholder="bv. pasta, rijst, kip, mediterraans"></textarea>
+
+            <h4 style="margin-top:0.8rem;">Menu maken</h4>
+            <p class="muted">Kies hoe je weekmenu opgebouwd wordt. Voor optie 2 is minstens 1 eigen maaltijd nodig, voor optie 3 minstens 8.</p>
+            <select id="profile-menu-mode">
+              <option value="ai_only">Alleen AI gegenereerde maaltijden</option>
+              <option value="ai_and_custom">AI gegenereerde en eigen maaltijden</option>
+              <option value="custom_only">Alleen eigen maaltijden</option>
+            </select>
+            <p id="profile-menu-mode-help" class="muted"></p>
+
+            <div class="button-row">
+              <button id="save-profile-btn" class="btn btn-primary" type="button">Bewaar voorkeuren</button>
+              <span id="profile-save-status" class="muted"></span>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js?v=20260208v"></script>
+</body>
+</html>
