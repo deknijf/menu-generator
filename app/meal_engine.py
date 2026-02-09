@@ -2,10 +2,56 @@ import json
 from pathlib import Path
 import random
 from datetime import datetime
+import re
 
 
 def load_recipes(path="app/recipes.json"):
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _cuisine_bias(recipe, settings):
+    nutrition = settings.get("nutrition", {})
+    west_pref = float(nutrition.get("west_europe_preference", 2.2) or 0)
+    asian_penalty = float(nutrition.get("asian_penalty", 2.8) or 0)
+
+    tags = {str(tag).strip().lower() for tag in recipe.get("tags", [])}
+    text_parts = [str(recipe.get("name", "")).lower(), str(recipe.get("description", "")).lower(), " ".join(tags)]
+    for ingredient in recipe.get("ingredients", []):
+        text_parts.append(str(ingredient.get("name", "")).lower())
+    text = " ".join(part for part in text_parts if part)
+
+    west_markers = {
+        "west-europe",
+        "belgian",
+        "dutch",
+        "french",
+        "german",
+        "british",
+        "irish",
+        "mediterranean",
+        "italian",
+        "spanish",
+        "portuguese",
+        "greek",
+    }
+    asian_markers = {
+        "asian",
+        "thai",
+        "vietnamese",
+        "japanese",
+        "korean",
+        "chinese",
+        "indian",
+        "indonesian",
+        "malaysian",
+    }
+
+    score = 0.0
+    if any(marker in tags or marker in text for marker in west_markers):
+        score += west_pref
+    if any(marker in tags or marker in text for marker in asian_markers):
+        score -= asian_penalty
+    return score
 
 
 def _recipe_score(recipe, settings, options):
@@ -51,9 +97,16 @@ def _recipe_score(recipe, settings, options):
     if options.get("prefer_fish") and "fish" in recipe.get("tags", []):
         score += 1.5
 
+    score += _cuisine_bias(recipe, settings)
+
     # Give externally sourced AI meals a small boost so they actually appear in rotation.
     if str(recipe.get("id", "")).startswith("ext_"):
         score += 0.95
+
+    rating = int(recipe.get("rating") or 3)
+    rating = max(1, min(5, rating))
+    # Higher rated recipes are preferred and can show up more often in generated weeks.
+    score += (rating - 3) * 0.55
 
     return score
 
@@ -76,17 +129,22 @@ def _is_pasta_like(recipe):
 
 def _max_occurrences(recipe, day_count):
     rotation = (recipe.get("rotation_limit") or "").lower().strip()
+    rating = max(1, min(5, int(recipe.get("rating") or 3)))
     if not rotation:
         # Default diversity guardrails for meals without explicit rotation settings.
         recipe_id = str(recipe.get("id", ""))
         if recipe_id.startswith("ext_"):
             # External AI meals should be rotated aggressively to keep variety high.
-            return max(1, int((day_count + 6) // 7))
-        return max(2, int((day_count + 3) // 4))
+            base = max(1, int((day_count + 6) // 7))
+            return min(day_count, base + (1 if rating >= 4 else 0))
+        base = max(2, int((day_count + 3) // 4))
+        return min(day_count, base + max(0, rating - 3))
     if rotation == "2_per_week":
-        return max(1, int((day_count * 2 + 6) // 7))
+        base = max(1, int((day_count * 2 + 6) // 7))
+        return min(day_count, base + (1 if rating >= 4 else 0))
     if rotation == "1_per_week":
-        return max(1, int((day_count + 6) // 7))
+        base = max(1, int((day_count + 6) // 7))
+        return min(day_count, base + (1 if rating == 5 else 0))
     if rotation == "1_per_month":
         return max(1, int((day_count + 29) // 30))
     return None
@@ -104,13 +162,72 @@ def _blocked_by_neighbors(recipe, prev_recipe=None, next_recipe=None):
     return False
 
 
+def _normalize_token(value):
+    return str(value or "").strip().lower()
+
+
+def _expand_allergy_tokens(token):
+    base = _normalize_token(token)
+    if not base:
+        return set()
+
+    expanded = {base}
+    citrus_aliases = {
+        "citroen",
+        "citroensap",
+        "citroenzeste",
+        "lemon",
+        "lemon juice",
+        "lemon zest",
+        "limoen",
+        "limoensap",
+        "limoenzeste",
+        "lime",
+        "lime juice",
+        "lime zest",
+    }
+
+    if base in citrus_aliases:
+        expanded.update(citrus_aliases)
+    return expanded
+
+
+def _recipe_contains_allergy(recipe, allergy):
+    tokens = _expand_allergy_tokens(allergy)
+    if not tokens:
+        return False
+
+    # 1) Explicit allergen metadata
+    recipe_allergens = {_normalize_token(a) for a in recipe.get("allergens", [])}
+    if tokens.intersection(recipe_allergens):
+        return True
+
+    # 2) Ingredient names, tags and recipe name (for user-defined intolerances like "citroen")
+    parts = [_normalize_token(recipe.get("name", ""))]
+    parts.extend(_normalize_token(tag) for tag in recipe.get("tags", []))
+    for ing in recipe.get("ingredients", []):
+        parts.append(_normalize_token(ing.get("name", "")))
+    haystack = " ".join(part for part in parts if part)
+    if not haystack:
+        return False
+
+    # Match full token boundaries when possible, fallback to substring for multi-word values.
+    for token in tokens:
+        if re.search(rf"(^|[^a-z0-9]){re.escape(token)}([^a-z0-9]|$)", haystack):
+            return True
+        if token in haystack:
+            return True
+    return False
+
+
 def _is_allowed(recipe, settings, allergies_override=None):
     if allergies_override is None:
-        allergies = set(a.lower() for a in settings["family"].get("allergies", []))
+        allergies = {_normalize_token(a) for a in settings["family"].get("allergies", [])}
     else:
-        allergies = set(a.lower() for a in allergies_override)
-    recipe_allergens = set(a.lower() for a in recipe.get("allergens", []))
-    return not allergies.intersection(recipe_allergens)
+        allergies = {_normalize_token(a) for a in allergies_override}
+
+    allergies = {a for a in allergies if a}
+    return not any(_recipe_contains_allergy(recipe, allergy) for allergy in allergies)
 
 
 def generate_plan(cook_days, settings, options, allergies_override=None, custom_recipes=None, include_base_recipes=True):
@@ -152,7 +269,8 @@ def generate_plan(cook_days, settings, options, allergies_override=None, custom_
                     continue
                 if _blocked_by_neighbors(recipe, prev_recipe=prev_recipe):
                     continue
-                repeat_penalty = used.get(recipe["id"], 0) * 2.6
+                rating = max(1, min(5, int(recipe.get("rating") or 3)))
+                repeat_penalty = used.get(recipe["id"], 0) * max(1.15, 2.85 - (rating * 0.3))
                 score = _recipe_score(recipe, settings, options) - repeat_penalty + random.uniform(-0.3, 1.0)
                 if _has_tag(recipe, "heavy"):
                     score += 0.9 if _day_is_weekend(day) else -0.45
@@ -171,7 +289,8 @@ def generate_plan(cook_days, settings, options, allergies_override=None, custom_
             if _blocked_by_neighbors(recipe, prev_recipe=prev_recipe):
                 continue
 
-            repeat_penalty = used.get(recipe["id"], 0) * 2.6
+            rating = max(1, min(5, int(recipe.get("rating") or 3)))
+            repeat_penalty = used.get(recipe["id"], 0) * max(1.2, 2.9 - (rating * 0.3))
             score = _recipe_score(recipe, settings, options) - repeat_penalty + random.uniform(-0.6, 0.6)
 
             if _has_tag(recipe, "heavy"):
@@ -213,10 +332,17 @@ def select_best_recipe(
     next_recipe=None,
     allergies_override=None,
     excluded_ids=None,
+    recent_ids=None,
     custom_recipes=None,
     include_base_recipes=True,
 ):
     excluded = set(excluded_ids or [])
+    recent_usage = {}
+    for rid in recent_ids or []:
+        key = str(rid or "").strip()
+        if not key:
+            continue
+        recent_usage[key] = recent_usage.get(key, 0) + 1
     candidates = []
     base = list(load_recipes()) if include_base_recipes else []
     all_recipes = base + list(custom_recipes or [])
@@ -238,6 +364,9 @@ def select_best_recipe(
 
     def score(recipe):
         value = _recipe_score(recipe, settings, options)
+        rating = max(1, min(5, int(recipe.get("rating") or 3)))
+        recent_penalty = max(0.65, 1.5 - (rating * 0.12))
+        value -= recent_usage.get(recipe.get("id"), 0) * recent_penalty
         if _has_tag(recipe, "heavy"):
             if day_iso and _day_is_weekend(day_iso):
                 value += 0.7
@@ -246,4 +375,5 @@ def select_best_recipe(
         return value
 
     ranked = sorted(candidates, key=score, reverse=True)
-    return ranked[0]
+    top_k = ranked[: min(6, len(ranked))]
+    return random.choice(top_k)

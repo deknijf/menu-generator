@@ -1,7 +1,10 @@
 from datetime import date, datetime, timedelta
+from pathlib import Path
+from uuid import uuid4
 
 from flask import (
     abort,
+    current_app,
     jsonify,
     redirect,
     render_template,
@@ -9,25 +12,43 @@ from flask import (
     session,
     url_for,
 )
+from werkzeug.utils import secure_filename
 
-from .config_loader import find_local_user, is_allowed_email, verify_local_password
 from .external_recipes import get_external_ai_recipes
 from .db import (
+    add_shopping_item,
+    clear_day_meals_between,
+    clear_shopping_items,
+    get_auth_user,
+    get_runtime_settings,
     create_custom_meal,
     delete_custom_meals,
+    get_custom_meal,
     get_day,
     get_days_between,
     get_user_allergies,
+    get_user_dislikes,
     get_user_likes,
     get_user_menu_mode,
     list_custom_meals,
+    list_shopping_items,
+    replace_shopping_items,
+    set_shopping_item_checked,
     set_day_cook,
     set_day_meal,
     set_user_allergies,
+    set_user_dislikes,
     set_user_likes,
     set_user_menu_mode,
+    set_app_setting,
+    set_auth_config,
+    update_auth_password,
     update_custom_meal,
+    update_custom_meal_image,
+    update_custom_meal_rating,
     upsert_user,
+    upsert_auth_user,
+    verify_auth_password,
 )
 from .meal_engine import generate_plan, recipes_by_id, select_best_recipe
 
@@ -36,6 +57,15 @@ def _require_auth():
     user = session.get("user")
     if not user:
         abort(401)
+    auth_user = get_auth_user(user.get("email", ""))
+    if auth_user:
+        user["name"] = auth_user.get("name", user.get("name"))
+        user["is_admin"] = bool(auth_user.get("is_admin"))
+    else:
+        settings = get_runtime_settings(current_app.config.get("SETTINGS", {}))
+        admin_email = settings.get("auth", {}).get("admin_email", "")
+        user["is_admin"] = user.get("email") == admin_email
+    session["user"] = user
     return user
 
 
@@ -60,6 +90,21 @@ def _normalize_allergies(values):
     return out
 
 
+def _runtime_settings(app):
+    return get_runtime_settings(app.config.get("SETTINGS", {}))
+
+
+def _normalize_email_values(values):
+    return _normalize_allergies(values)
+
+
+def _to_float(value, default):
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
 def _effective_allergies(user_email, settings):
     family_allergies = settings["family"].get("allergies", [])
     personal_allergies = get_user_allergies(user_email)
@@ -72,10 +117,18 @@ def _effective_likes(user_email, settings):
     return _normalize_allergies([*family_likes, *personal_likes])
 
 
+def _effective_dislikes(user_email, settings):
+    family_dislikes = settings["family"].get("dislikes", [])
+    personal_dislikes = get_user_dislikes(user_email)
+    return _normalize_allergies([*family_dislikes, *personal_dislikes])
+
+
 def _settings_for_user(user_email, settings):
     likes = _effective_likes(user_email, settings)
+    dislikes = _effective_dislikes(user_email, settings)
     family = dict(settings.get("family", {}))
     family["likes"] = likes
+    family["dislikes"] = dislikes
     merged = dict(settings)
     merged["family"] = family
     return merged
@@ -136,6 +189,201 @@ def _date_range(start, end):
 
 def _shift_iso(day_iso, delta_days):
     return (datetime.strptime(day_iso, "%Y-%m-%d").date() + timedelta(days=delta_days)).isoformat()
+
+
+def _normalize_token(value):
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _normalize_ingredient_name(name):
+    token = _normalize_token(name)
+    aliases = {
+        "look": "knoflook",
+        "garlic": "knoflook",
+        "clove garlic": "knoflook",
+        "olive oil": "olijfolie",
+        "olijf olie": "olijfolie",
+        "bay leaf": "laurierblad",
+        "bay leaves": "laurierblad",
+        "carrot": "wortel",
+        "carrots": "wortelen",
+        "onion": "ui",
+        "red onion": "rode ui",
+        "white onion": "witte ui",
+        "potato": "aardappel",
+        "potatoes": "aardappelen",
+        "tomato": "tomaat",
+        "tomatoes": "tomaten",
+        "cherry tomatoes": "cherrytomaten",
+        "bell pepper": "paprika",
+        "cucumber": "komkommer",
+        "zucchini": "courgette",
+        "spinach": "spinazie",
+        "broccoli": "broccoli",
+        "mushroom": "champignon",
+        "mushrooms": "champignons",
+        "parsley": "peterselie",
+        "coriander": "koriander",
+        "basil": "basilicum",
+        "oregano": "oregano",
+        "thyme": "tijm",
+        "rosemary": "rozemarijn",
+        "mint": "munt",
+        "cumin": "komijn",
+        "paprika": "paprikapoeder",
+        "chili powder": "chilipoeder",
+        "black pepper": "zwarte peper",
+        "pepper": "peper",
+        "salt": "zout",
+        "rice": "rijst",
+        "pasta": "pasta",
+        "spaghetti": "spaghetti",
+        "noodles": "noedels",
+        "couscous": "couscous",
+        "bread": "brood",
+        "flour": "bloem",
+        "chickpeas": "kikkererwten",
+        "lentils": "linzen",
+        "beans": "bonen",
+        "chicken stock": "kippenbouillon",
+        "vegetable stock": "groentebouillon",
+        "beef stock": "runderbouillon",
+        "milk": "melk",
+        "cream": "room",
+        "butter": "boter",
+        "cheese": "kaas",
+        "egg": "ei",
+        "eggs": "eieren",
+        "salmon": "zalm",
+        "cod": "kabeljauw",
+        "tuna": "tonijn",
+        "prawns": "garnalen",
+        "shrimp": "garnalen",
+        "beef": "rundvlees",
+        "ground beef": "rundergehakt",
+        "minced beef": "rundergehakt",
+        "turkey": "kalkoen",
+        "chicken": "kipfilet",
+        "chicken breast": "kipfilet",
+        "kip": "kipfilet",
+        "lemon": "citroen",
+        "lemon juice": "citroensap",
+        "lime": "limoen",
+        "lime juice": "limoensap",
+    }
+    return aliases.get(token, token)
+
+
+def _normalize_unit(quantity, unit):
+    qty = float(quantity or 0)
+    raw = _normalize_token(unit)
+
+    # normalize to a compact canonical unit set
+    if any(marker in raw for marker in ("kilogram", "kilograms", "kilo", "kg")):
+        return qty * 1000.0, "g"
+    if any(marker in raw for marker in ("gram", "grams", "g")):
+        return qty, "g"
+    if any(marker in raw for marker in ("liter", "litre", "liters", "litres", " l")) or raw == "l":
+        return qty * 1000.0, "ml"
+    if any(marker in raw for marker in ("milliliter", "millilitre", "ml")):
+        return qty, "ml"
+    if any(marker in raw for marker in ("clove", "cloves", "teen", "teentje", "teentjes")):
+        return qty, "teentje"
+    if any(marker in raw for marker in ("stuk", "stuks", "piece", "pieces", "pc", "pcs")):
+        return qty, "stuk"
+    if any(marker in raw for marker in ("tbsp", "tbs", "tblsp", "tablespoon", "tablespoons", "el", "eetlepel", "eetlepels")):
+        return qty, "eetlepel"
+    if any(marker in raw for marker in ("tsp", "tl", "theelepel", "theelepels")):
+        return qty, "theelepel"
+    if any(marker in raw for marker in ("splash", "scheut")):
+        return qty, "scheut"
+    if any(marker in raw for marker in ("handful", "handvol")):
+        return qty, "handvol"
+    if any(marker in raw for marker in ("pinch", "snufje")):
+        return qty, "snufje"
+    return qty, raw
+
+
+def _build_shopping_items(user_email, dates, person_count, base_servings):
+    scale = person_count / base_servings
+    recipe_map = _recipe_map_for_user(user_email)
+    ingredients = {}
+
+    for day in dates:
+        row = get_day(day)
+        if not row or not row.get("meal_id"):
+            continue
+
+        recipe = recipe_map.get(row["meal_id"])
+        if not recipe:
+            continue
+
+        for ing in recipe.get("ingredients", []):
+            name = _normalize_ingredient_name(ing.get("name", ""))
+            quantity = float(ing.get("quantity", 0)) * scale
+            quantity, unit = _normalize_unit(quantity, ing.get("unit", ""))
+            key = (name, unit)
+            ingredients[key] = ingredients.get(key, 0) + quantity
+
+    output = [
+        {"name": key[0], "quantity": qty, "unit": key[1], "checked": False, "sort_order": idx}
+        for idx, (key, qty) in enumerate(sorted(ingredients.items(), key=lambda item: item[0][0]))
+    ]
+    return output
+
+
+def _decorate_shopping_items(items):
+    out = []
+    for item in items or []:
+        out.append(
+            {
+                **item,
+                "show_quantity": True,
+            }
+        )
+    return sorted(out, key=lambda x: (bool(x.get("checked", False)), int(x.get("sort_order", 0)), str(x.get("name", "")).lower()))
+
+
+def _normalize_stored_shopping_items(items):
+    merged = {}
+    order = {}
+    checked_state = {}
+    for idx, item in enumerate(items or []):
+        name = _normalize_ingredient_name(item.get("name", ""))
+        quantity, unit = _normalize_unit(item.get("quantity", 0), item.get("unit", ""))
+        key = (name, unit)
+        merged[key] = merged.get(key, 0) + float(quantity or 0)
+        if key not in order:
+            order[key] = idx
+            checked_state[key] = bool(item.get("checked", False))
+        else:
+            checked_state[key] = checked_state[key] and bool(item.get("checked", False))
+
+    normalized = []
+    for key in sorted(order.keys(), key=lambda k: order[k]):
+        normalized.append(
+            {
+                "name": key[0],
+                "quantity": merged[key],
+                "unit": key[1],
+                "checked": checked_state[key],
+                "sort_order": order[key],
+            }
+        )
+    return normalized
+
+
+def _has_generated_plan_between(start, end):
+    rows = get_days_between(start, end)
+    return any(row.get("meal_id") for row in rows)
+
+
+def _week_bounds(day_iso):
+    day_date = datetime.strptime(day_iso, "%Y-%m-%d").date()
+    weekday = day_date.weekday()  # maandag=0
+    monday = day_date - timedelta(days=weekday)
+    sunday = monday + timedelta(days=6)
+    return monday.isoformat(), sunday.isoformat()
 
 
 def _meal_explanation(recipe, options, person_count):
@@ -258,21 +506,51 @@ def _normalize_custom_meal_payload(payload):
     allowed_rotation_limits = {"2_per_week", "1_per_week", "1_per_month"}
     if rotation_limit not in allowed_rotation_limits:
         rotation_limit = "1_per_week"
+    rating = _parse_int(payload.get("rating"), default=3, min_value=1, max_value=5)
 
+    nutrition_payload = payload.get("nutrition") or {}
     normalized = {
         "name": name,
         "description": payload.get("description", ""),
         "image_url": payload.get("image_url", ""),
+        "rating": rating,
         "tags": norm_list(payload.get("tags", [])),
         "allergens": norm_list(payload.get("allergens", [])),
         "ingredients": normalized_ingredients,
         "preparation": normalized_preparation,
         "rotation_limit": rotation_limit,
-        "protein": float(payload.get("protein") or 0),
-        "carbs": float(payload.get("carbs") or 0),
-        "calories": float(payload.get("calories") or 0),
+        "protein": float(payload.get("protein") if payload.get("protein") is not None else nutrition_payload.get("protein") or 0),
+        "carbs": float(payload.get("carbs") if payload.get("carbs") is not None else nutrition_payload.get("carbs") or 0),
+        "calories": float(payload.get("calories") if payload.get("calories") is not None else nutrition_payload.get("calories") or 0),
     }
     return normalized, None
+
+
+def _custom_meal_bulk_item(item):
+    nutrition = item.get("nutrition") or {}
+    return {
+        "name": item.get("name", ""),
+        "description": item.get("description", ""),
+        "image_url": item.get("image_url", ""),
+        "rating": int(item.get("rating") or 3),
+        "tags": item.get("tags", []),
+        "allergens": item.get("allergens", []),
+        "ingredients": item.get("ingredients", []),
+        "preparation": item.get("preparation", []),
+        "protein": float(nutrition.get("protein") or 0),
+        "carbs": float(nutrition.get("carbs") or 0),
+        "calories": float(nutrition.get("calories") or 0),
+        "rotation_limit": item.get("rotation_limit", "1_per_week"),
+    }
+
+
+def _normalize_custom_meal_id_token(meal_id):
+    token = str(meal_id).strip()
+    if token.startswith("custom_"):
+        token = token[len("custom_") :]
+    if not token.isdigit():
+        return None
+    return token
 
 
 def _custom_recipes_for_user(user_email):
@@ -285,6 +563,7 @@ def _custom_recipes_for_user(user_email):
                 "name": item["name"],
                 "description": item.get("description", ""),
                 "image_url": item.get("image_url", ""),
+                "rating": int(item.get("rating") or 3),
                 "tags": item.get("tags", []),
                 "allergens": item.get("allergens", []),
                 "ingredients": item.get("ingredients", []),
@@ -325,13 +604,14 @@ def register_routes(app):
     def index():
         if not session.get("user"):
             return redirect(url_for("login"))
-        return render_template("index.html", settings=app.config["SETTINGS"])
+        return render_template("index.html", settings=_runtime_settings(app))
 
     @app.get("/login")
     def login():
+        settings = _runtime_settings(app)
         return render_template(
             "login.html",
-            dev_login=app.config["SETTINGS"]["auth"].get("allow_dev_login", False),
+            dev_login=settings["auth"].get("allow_dev_login", False),
             login_error=request.args.get("error", ""),
         )
 
@@ -344,34 +624,32 @@ def register_routes(app):
     def auth_login():
         email = request.form.get("email", "").strip().lower()
         password = request.form.get("password", "")
-        settings = app.config["SETTINGS"]
-        user_cfg = find_local_user(email, settings)
-        if not user_cfg:
+        existing = get_auth_user(email)
+        if not existing:
             return redirect(url_for("login", error="Onbekend account"))
-        if not verify_local_password(user_cfg, password):
+        user_cfg = verify_auth_password(email, password)
+        if not user_cfg:
             return redirect(url_for("login", error="Verkeerd wachtwoord"))
-
-        admin_email = settings["auth"].get("admin_email", "").lower().strip()
-        is_admin = email == admin_email
-        user = {"email": email, "name": user_cfg.get("name", email), "is_admin": is_admin}
+        user = {"email": email, "name": user_cfg.get("name", email), "is_admin": bool(user_cfg.get("is_admin"))}
         session["user"] = user
-        upsert_user(email, user["name"], is_admin)
+        upsert_user(email, user["name"], user["is_admin"])
         return redirect(url_for("index"))
 
     @app.get("/auth/dev")
     def auth_dev():
-        if not app.config["SETTINGS"]["auth"].get("allow_dev_login", False):
+        settings = _runtime_settings(app)
+        if not settings["auth"].get("allow_dev_login", False):
             return "Dev login disabled", 403
 
         email = request.args.get("email", "").strip().lower()
         if not email:
             return "Missing email", 400
 
-        settings = app.config["SETTINGS"]
-        if not is_allowed_email(email, settings):
+        allowed = {str(item).strip().lower() for item in settings["auth"].get("allowed_emails", [])}
+        admin_email = settings["auth"].get("admin_email", "").lower().strip()
+        if email != admin_email and email not in allowed:
             return "Je account heeft geen toegang", 403
 
-        admin_email = settings["auth"].get("admin_email", "").lower().strip()
         is_admin = email == admin_email
         user = {"email": email, "name": email.split("@")[0], "is_admin": is_admin}
         session["user"] = user
@@ -386,26 +664,49 @@ def register_routes(app):
     @app.get("/api/profile")
     def api_profile_get():
         user = _require_auth()
+        settings = _runtime_settings(app)
         allergies = get_user_allergies(user["email"])
         likes = get_user_likes(user["email"])
+        dislikes = get_user_dislikes(user["email"])
         mode, count = _effective_menu_mode(user["email"])
-        return jsonify({"allergies": allergies, "likes": likes, "menu_mode": mode, "custom_meals_count": count})
+        return jsonify(
+            {
+                "allergies": allergies,
+                "likes": likes,
+                "dislikes": dislikes,
+                "menu_mode": mode,
+                "custom_meals_count": count,
+                "global": {
+                    "nutrition": settings["nutrition"],
+                    "family": settings["family"],
+                    "auth": {
+                        "admin_email": settings["auth"].get("admin_email", ""),
+                        "allowed_emails": settings["auth"].get("allowed_emails", []),
+                    },
+                },
+            }
+        )
 
     @app.put("/api/profile")
     def api_profile_put():
         user = _require_auth()
+        settings = _runtime_settings(app)
         payload = request.get_json(force=True, silent=True) or {}
         allergies = payload.get("allergies", [])
         likes = payload.get("likes", [])
+        dislikes = payload.get("dislikes", [])
         menu_mode = _normalize_menu_mode(payload.get("menu_mode", "ai_only"))
 
         if isinstance(allergies, str):
             allergies = [part.strip() for part in allergies.split(",")]
         if isinstance(likes, str):
             likes = [part.strip() for part in likes.split(",")]
+        if isinstance(dislikes, str):
+            dislikes = [part.strip() for part in dislikes.split(",")]
 
         allergies = _normalize_allergies(allergies)
         likes = _normalize_allergies(likes)
+        dislikes = _normalize_allergies(dislikes)
         custom_count = len(list_custom_meals(user["email"]))
         if menu_mode == "ai_and_custom" and custom_count < 1:
             return jsonify({"error": "Voor deze optie heb je minstens 1 eigen maaltijd nodig."}), 400
@@ -414,14 +715,102 @@ def register_routes(app):
 
         set_user_allergies(user["email"], allergies)
         set_user_likes(user["email"], likes)
+        set_user_dislikes(user["email"], dislikes)
         set_user_menu_mode(user["email"], menu_mode)
+
+        if user.get("is_admin"):
+            global_payload = payload.get("global", {}) or {}
+
+            nutrition = dict(settings.get("nutrition", {}))
+            nutrition.update(global_payload.get("nutrition", {}) or {})
+            nutrition = {
+                "high_protein_weight": _to_float(nutrition.get("high_protein_weight"), 1.3),
+                "low_carb_weight": _to_float(nutrition.get("low_carb_weight"), 1.1),
+                "weekly_min_fish": int(_to_float(nutrition.get("weekly_min_fish"), 0)),
+                "west_europe_preference": _to_float(nutrition.get("west_europe_preference"), 2.2),
+                "asian_penalty": _to_float(nutrition.get("asian_penalty"), 2.8),
+            }
+
+            family_payload = global_payload.get("family", {}) or {}
+            family = {
+                "allergies": _normalize_allergies(family_payload.get("allergies", settings["family"].get("allergies", []))),
+                "likes": _normalize_allergies(family_payload.get("likes", settings["family"].get("likes", []))),
+                "dislikes": _normalize_allergies(family_payload.get("dislikes", settings["family"].get("dislikes", []))),
+            }
+
+            auth_payload = global_payload.get("auth", {}) or {}
+            admin_email = str(auth_payload.get("admin_email", settings["auth"].get("admin_email", ""))).strip().lower()
+            if not admin_email:
+                return jsonify({"error": "Admin e-mail is verplicht."}), 400
+            allowed_emails = auth_payload.get("allowed_emails", settings["auth"].get("allowed_emails", []))
+            if isinstance(allowed_emails, str):
+                allowed_emails = [part.strip() for part in allowed_emails.split(",")]
+            allowed_emails = _normalize_email_values(allowed_emails)
+
+            current_admin_email = settings["auth"].get("admin_email", "")
+            admin_name = str(auth_payload.get("admin_name") or "").strip() or admin_email
+            admin_password = str(auth_payload.get("admin_password") or "")
+            current_admin = get_auth_user(current_admin_email)
+
+            if admin_email and admin_email != current_admin_email and admin_password:
+                upsert_auth_user(
+                    email=admin_email,
+                    name=admin_name,
+                    password=admin_password,
+                    is_admin=True,
+                    password_is_hash=False,
+                )
+            elif admin_email and admin_email == current_admin_email and admin_password:
+                update_auth_password(admin_email, admin_password)
+            elif admin_email and admin_email != current_admin_email and current_admin:
+                upsert_auth_user(
+                    email=admin_email,
+                    name=admin_name,
+                    password=current_admin.get("password_hash", ""),
+                    is_admin=True,
+                    password_is_hash=True,
+                )
+            else:
+                existing_admin = get_auth_user(admin_email)
+                if existing_admin:
+                    upsert_auth_user(
+                        email=admin_email,
+                        name=admin_name,
+                        password=existing_admin.get("password_hash", ""),
+                        is_admin=True,
+                        password_is_hash=True,
+                    )
+
+            set_auth_config(admin_email, allowed_emails)
+            set_app_setting("nutrition", nutrition)
+            set_app_setting("family", family)
+
+            # Keep active session aligned with changed admin e-mail.
+            if user["email"] == current_admin_email and admin_email and admin_email != current_admin_email:
+                user["email"] = admin_email
+                user["is_admin"] = True
+                user["name"] = admin_name or user["name"]
+                session["user"] = user
+                upsert_user(user["email"], user["name"], True)
+
+            settings = _runtime_settings(app)
+
         return jsonify(
             {
                 "ok": True,
                 "allergies": allergies,
                 "likes": likes,
+                "dislikes": dislikes,
                 "menu_mode": menu_mode,
                 "custom_meals_count": custom_count,
+                "global": {
+                    "nutrition": settings["nutrition"],
+                    "family": settings["family"],
+                    "auth": {
+                        "admin_email": settings["auth"].get("admin_email", ""),
+                        "allowed_emails": settings["auth"].get("allowed_emails", []),
+                    },
+                },
             }
         )
 
@@ -448,8 +837,8 @@ def register_routes(app):
                     "date": day,
                     "cook": bool(row["cook"]) if row else True,
                     "meal_id": row["meal_id"] if row else None,
-                    "meal_name": recipe_map.get(row["meal_id"], {}).get("name") if row and row["meal_id"] else None,
-                    "meal_image": recipe_map.get(row["meal_id"], {}).get("image_url") if row and row["meal_id"] else None,
+                    "meal_name": recipe_map.get(row["meal_id"], {}).get("name") if row and row["cook"] and row["meal_id"] else None,
+                    "meal_image": recipe_map.get(row["meal_id"], {}).get("image_url") if row and row["cook"] and row["meal_id"] else None,
                 }
             )
 
@@ -472,13 +861,16 @@ def register_routes(app):
 
         current = get_day(day) or {}
         current_meal_id = current.get("meal_id")
-        user_settings = _settings_for_user(user["email"], app.config["SETTINGS"])
+        user_settings = _settings_for_user(user["email"], _runtime_settings(app))
         effective_allergies = _effective_allergies(user["email"], user_settings)
         recipe_map = _recipe_map_for_user(user["email"])
         prev_day = get_day(_shift_iso(day, -1)) or {}
         next_day = get_day(_shift_iso(day, 1)) or {}
         prev_recipe = recipe_map.get(prev_day.get("meal_id")) if prev_day.get("meal_id") else None
         next_recipe = recipe_map.get(next_day.get("meal_id")) if next_day.get("meal_id") else None
+        week_start, week_end = _week_bounds(day)
+        week_rows = get_days_between(week_start, week_end)
+        recent_ids = [row.get("meal_id") for row in week_rows if row.get("meal_id") and row.get("day_date") != day]
 
         recipe = select_best_recipe(
             user_settings,
@@ -488,6 +880,7 @@ def register_routes(app):
             next_recipe=next_recipe,
             allergies_override=effective_allergies,
             excluded_ids=[current_meal_id] if current_meal_id else [],
+            recent_ids=recent_ids,
             custom_recipes=_extra_recipes_for_mode(user["email"]),
             include_base_recipes=_include_base_recipes_for_mode(user["email"]),
         )
@@ -495,6 +888,7 @@ def register_routes(app):
             return jsonify({"error": "Geen alternatief gerecht beschikbaar"}), 400
 
         set_day_meal(day, recipe["id"])
+        clear_shopping_items(user["email"])
         return jsonify(
             {
                 "ok": True,
@@ -514,6 +908,12 @@ def register_routes(app):
     def api_custom_meals_get():
         user = _require_auth()
         return jsonify({"items": _custom_recipes_for_user(user["email"])})
+
+    @app.get("/api/custom-meals/export")
+    def api_custom_meals_export():
+        user = _require_auth()
+        items = [_custom_meal_bulk_item(item) for item in list_custom_meals(user["email"])]
+        return jsonify({"items": items})
 
     @app.post("/api/custom-meals")
     def api_custom_meals_post():
@@ -554,10 +954,8 @@ def register_routes(app):
         user = _require_auth()
         payload = request.get_json(force=True, silent=True) or {}
 
-        meal_token = str(meal_id).strip()
-        if meal_token.startswith("custom_"):
-            meal_token = meal_token[len("custom_") :]
-        if not meal_token.isdigit():
+        meal_token = _normalize_custom_meal_id_token(meal_id)
+        if meal_token is None:
             return jsonify({"error": "invalid meal id"}), 400
 
         normalized, error = _normalize_custom_meal_payload(payload)
@@ -568,6 +966,51 @@ def register_routes(app):
         if not ok:
             return jsonify({"error": "meal not found"}), 404
         return jsonify({"ok": True})
+
+    @app.put("/api/custom-meals/<meal_id>/rating")
+    def api_custom_meals_set_rating(meal_id):
+        user = _require_auth()
+        meal_token = _normalize_custom_meal_id_token(meal_id)
+        if meal_token is None:
+            return jsonify({"error": "invalid meal id"}), 400
+        payload = request.get_json(force=True, silent=True) or {}
+        rating = _parse_int(payload.get("rating"), default=3, min_value=1, max_value=5)
+        ok = update_custom_meal_rating(user["email"], meal_token, rating)
+        if not ok:
+            return jsonify({"error": "meal not found"}), 404
+        return jsonify({"ok": True, "rating": rating})
+
+    @app.post("/api/custom-meals/<meal_id>/photo")
+    def api_custom_meals_upload_photo(meal_id):
+        user = _require_auth()
+        meal_token = _normalize_custom_meal_id_token(meal_id)
+        if meal_token is None:
+            return jsonify({"error": "invalid meal id"}), 400
+
+        meal = get_custom_meal(user["email"], meal_token)
+        if not meal:
+            return jsonify({"error": "meal not found"}), 404
+
+        photo = request.files.get("photo")
+        if not photo or not photo.filename:
+            return jsonify({"error": "Kies eerst een fotobestand."}), 400
+        if not str(photo.mimetype or "").startswith("image/"):
+            return jsonify({"error": "Alleen afbeeldingsbestanden zijn toegestaan."}), 400
+
+        original_name = secure_filename(photo.filename)
+        ext = Path(original_name).suffix.lower()
+        if ext not in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+            ext = ".jpg"
+
+        target_dir = Path("static/uploads/custom_meals")
+        target_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{meal_token}_{uuid4().hex[:12]}{ext}"
+        target_path = target_dir / filename
+        photo.save(target_path)
+
+        image_url = f"/static/uploads/custom_meals/{filename}"
+        update_custom_meal_image(user["email"], meal_token, image_url)
+        return jsonify({"ok": True, "image_url": image_url})
 
     @app.delete("/api/custom-meals")
     def api_custom_meals_delete():
@@ -599,9 +1042,12 @@ def register_routes(app):
 
         if not start or not end:
             return jsonify({"error": "start and end are required"}), 400
+        force = _parse_bool(payload.get("force", False))
+        if not force and _has_generated_plan_between(start, end):
+            return jsonify({"error": "Er bestaat al een weekmenu voor deze periode. Opnieuw genereren?", "requires_confirmation": True}), 409
 
         person_count = _parse_int(options.get("person_count"), default=2, min_value=1, max_value=8)
-        user_settings = _settings_for_user(user["email"], app.config["SETTINGS"])
+        user_settings = _settings_for_user(user["email"], _runtime_settings(app))
         effective_allergies = _effective_allergies(user["email"], user_settings)
 
         days = get_days_between(start, end)
@@ -613,6 +1059,10 @@ def register_routes(app):
                 cook_days.append(d)
 
         cook_days = sorted(set(cook_days))
+
+        # Prevent stale meals from previous generations in the same range
+        # from leaking into refreshed shopping lists.
+        clear_day_meals_between(start, end)
 
         plan = generate_plan(
             cook_days,
@@ -638,7 +1088,22 @@ def register_routes(app):
                 }
             )
 
+        clear_shopping_items(user["email"])
         return jsonify({"plan": enriched})
+
+    @app.get("/api/shopping-list")
+    def api_shopping_list_get():
+        user = _require_auth()
+        current = list_shopping_items(user["email"])
+        normalized = _normalize_stored_shopping_items(current)
+        replace_shopping_items(user["email"], normalized)
+        return jsonify({"items": _decorate_shopping_items(list_shopping_items(user["email"]))})
+
+    @app.delete("/api/shopping-list")
+    def api_shopping_list_clear():
+        user = _require_auth()
+        clear_shopping_items(user["email"])
+        return jsonify({"ok": True, "items": []})
 
     @app.post("/api/shopping-list")
     def api_shopping_list():
@@ -647,12 +1112,11 @@ def register_routes(app):
         dates = payload.get("dates", [])
         person_count = _parse_int(payload.get("person_count"), default=2, min_value=1, max_value=8)
         base_servings = _parse_int(
-            app.config["SETTINGS"].get("app", {}).get("base_servings", 2),
+            _runtime_settings(app).get("app", {}).get("base_servings", 2),
             default=2,
             min_value=1,
             max_value=8,
         )
-        scale = person_count / base_servings
 
         if not dates:
             start = payload.get("start")
@@ -661,40 +1125,50 @@ def register_routes(app):
                 return jsonify({"error": "dates or start/end are required"}), 400
             dates = list(_date_range(start, end))
 
-        recipe_map = _recipe_map_for_user(user["email"])
-        ingredients = {}
+        output = _build_shopping_items(user["email"], dates, person_count, base_servings)
+        replace_shopping_items(user["email"], output)
+        return jsonify({"items": _decorate_shopping_items(list_shopping_items(user["email"])), "person_count": person_count})
 
-        for day in dates:
-            row = get_day(day)
-            if not row or not row.get("meal_id"):
-                continue
+    @app.post("/api/shopping-list/items")
+    def api_shopping_list_add_item():
+        user = _require_auth()
+        payload = request.get_json(force=True, silent=True) or {}
+        name = (payload.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "name is required"}), 400
+        quantity, unit = _normalize_unit(payload.get("quantity", 1), payload.get("unit", "stuk"))
+        normalized_name = _normalize_ingredient_name(name)
+        add_shopping_item(user["email"], normalized_name, quantity, unit)
+        normalized = _normalize_stored_shopping_items(list_shopping_items(user["email"]))
+        replace_shopping_items(user["email"], normalized)
+        return jsonify({"ok": True, "items": _decorate_shopping_items(list_shopping_items(user["email"]))})
 
-            recipe = recipe_map.get(row["meal_id"])
-            if not recipe:
-                continue
-
-            for ing in recipe.get("ingredients", []):
-                key = (ing["name"], ing.get("unit", ""))
-                ingredients[key] = ingredients.get(key, 0) + (float(ing.get("quantity", 0)) * scale)
-
-        output = [
-            {"name": key[0], "quantity": qty, "unit": key[1]}
-            for key, qty in sorted(ingredients.items(), key=lambda item: item[0][0])
-        ]
-        return jsonify({"items": output, "person_count": person_count})
+    @app.put("/api/shopping-list/<int:item_id>")
+    def api_shopping_list_update_item(item_id):
+        user = _require_auth()
+        payload = request.get_json(force=True, silent=True) or {}
+        checked = _parse_bool(payload.get("checked", False))
+        ok = set_shopping_item_checked(user["email"], item_id, checked)
+        if not ok:
+            return jsonify({"error": "item not found"}), 404
+        normalized = _normalize_stored_shopping_items(list_shopping_items(user["email"]))
+        replace_shopping_items(user["email"], normalized)
+        return jsonify({"ok": True, "items": _decorate_shopping_items(list_shopping_items(user["email"]))})
 
     @app.get("/api/settings")
     def api_settings():
         user = _require_auth()
-        settings = app.config["SETTINGS"]
+        settings = _runtime_settings(app)
         user_allergies = get_user_allergies(user["email"])
         user_likes = get_user_likes(user["email"])
+        user_dislikes = get_user_dislikes(user["email"])
         mode, count = _effective_menu_mode(user["email"])
         public = {
             "nutrition": settings["nutrition"],
             "family": {
                 "allergies": settings["family"].get("allergies", []),
                 "likes": settings["family"].get("likes", []),
+                "dislikes": settings["family"].get("dislikes", []),
             },
             "auth": {
                 "admin_email": settings["auth"].get("admin_email"),
@@ -706,6 +1180,7 @@ def register_routes(app):
             "profile": {
                 "allergies": user_allergies,
                 "likes": user_likes,
+                "dislikes": user_dislikes,
                 "menu_mode": mode,
                 "custom_meals_count": count,
             },

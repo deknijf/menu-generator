@@ -3,7 +3,7 @@ from flask import Flask
 from dotenv import load_dotenv
 
 from .config_loader import load_settings
-from .db import init_db
+from .db import bootstrap_db_settings, init_db
 from .routes import register_routes
 
 
@@ -16,6 +16,7 @@ def create_app():
     app.secret_key = os.getenv("APP_SECRET_KEY", settings["app"]["secret_key"])
 
     init_db()
+    bootstrap_db_settings(settings)
 
     register_routes(app)
     return app
