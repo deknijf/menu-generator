@@ -3,15 +3,17 @@ const state = {
   days: [],
   plan: [],
   shopping: [],
-  shoppingCounter: 0,
   settings: null,
   profileAllergies: [],
+  profileLikes: [],
+  profileDislikes: [],
   customMeals: [],
   selectedCustomMealIds: [],
   profileMenuMode: "ai_only",
   customMealsCount: 0,
 };
 const sidebarStorageKey = "sidebar_collapsed";
+const activeTabStorageKey = "active_tab";
 
 const mealImages = {
   grilled_chicken_salad: "https://images.unsplash.com/photo-1546793665-c74683f339c1?auto=format&fit=crop&w=600&q=80",
@@ -45,6 +47,12 @@ function parseIsoDate(isoDate) {
 function formatDateEu(isoDate) {
   const [year, month, day] = isoDate.split("-");
   return `${day}/${month}/${year}`;
+}
+
+function weekdayName(isoDate) {
+  const date = parseIsoDate(isoDate);
+  const names = ["zondag", "maandag", "dinsdag", "woensdag", "donderdag", "vrijdag", "zaterdag"];
+  return names[date.getDay()];
 }
 
 function weekdayShort(isoDate) {
@@ -134,45 +142,118 @@ function splitLinesText(value) {
     .filter(Boolean);
 }
 
+function splitChipTokens(value) {
+  return String(value || "")
+    .split(/[\s,;]+/g)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function getProfileChipState(field) {
+  if (field === "allergies") return state.profileAllergies;
+  if (field === "likes") return state.profileLikes;
+  return state.profileDislikes;
+}
+
+function setProfileChipState(field, tokens) {
+  const unique = [];
+  for (const token of tokens || []) {
+    if (token && !unique.includes(token)) unique.push(token);
+  }
+  if (field === "allergies") state.profileAllergies = unique;
+  else if (field === "likes") state.profileLikes = unique;
+  else state.profileDislikes = unique;
+}
+
+function renderProfileChips(field) {
+  const root = document.getElementById(`profile-${field}-chips`);
+  const input = document.getElementById(`profile-${field}-input`);
+  if (!root || !input) return;
+
+  root.querySelectorAll(".chip-tag").forEach((chip) => chip.remove());
+  const values = getProfileChipState(field);
+  values.forEach((value, index) => {
+    const chip = document.createElement("span");
+    chip.className = "chip-tag";
+    chip.innerHTML = `<span>${value}</span><button type="button" aria-label="Verwijder ${value}">×</button>`;
+    chip.querySelector("button").addEventListener("click", () => {
+      const next = getProfileChipState(field).slice();
+      next.splice(index, 1);
+      setProfileChipState(field, next);
+      renderProfileChips(field);
+    });
+    root.insertBefore(chip, input);
+  });
+}
+
+function addProfileChipTokens(field, rawValue) {
+  const tokens = splitChipTokens(rawValue);
+  if (!tokens.length) return;
+  const next = getProfileChipState(field).slice();
+  tokens.forEach((token) => {
+    if (!next.includes(token)) next.push(token);
+  });
+  setProfileChipState(field, next);
+  renderProfileChips(field);
+}
+
+function initProfileChipField(field) {
+  const input = document.getElementById(`profile-${field}-input`);
+  const root = document.getElementById(`profile-${field}-chips`);
+  if (!input || !root) return;
+
+  input.addEventListener("keydown", (event) => {
+    if (event.key === " " || event.key === "Enter" || event.key === "Tab" || event.key === ",") {
+      event.preventDefault();
+      addProfileChipTokens(field, input.value);
+      input.value = "";
+    } else if (event.key === "Backspace" && !input.value) {
+      const items = getProfileChipState(field).slice();
+      if (!items.length) return;
+      items.pop();
+      setProfileChipState(field, items);
+      renderProfileChips(field);
+    }
+  });
+
+  input.addEventListener("blur", () => {
+    addProfileChipTokens(field, input.value);
+    input.value = "";
+  });
+
+  input.addEventListener("paste", (event) => {
+    const text = event.clipboardData?.getData("text");
+    if (!text) return;
+    event.preventDefault();
+    addProfileChipTokens(field, text);
+    input.value = "";
+  });
+}
+
 function isAiGeneratedMeal(item) {
   const id = String(item?.meal_id || item?.id || "");
   return !id.startsWith("custom_");
 }
 
-function shoppingBaseKey(item) {
-  const name = String(item.name || "").trim().toLowerCase();
-  const unit = String(item.unit || "").trim().toLowerCase();
-  return `${name}|${unit}`;
-}
-
-function shoppingUiItem(item, order, previousByBaseKey = {}) {
-  const baseKey = shoppingBaseKey(item);
-  const prev = previousByBaseKey[baseKey];
-  state.shoppingCounter += 1;
-  return {
-    ...item,
-    __id: `${baseKey}|${state.shoppingCounter}`,
-    __baseKey: baseKey,
-    __order: order,
-    __checked: prev ? !!prev.__checked : false,
-  };
-}
-
 function normalizeShoppingItems(rawItems) {
-  const prevByBaseKey = {};
-  state.shopping.forEach((item) => {
-    prevByBaseKey[item.__baseKey] = item;
-  });
-
-  return (rawItems || []).map((item, index) => shoppingUiItem(item, index, prevByBaseKey));
+  return (rawItems || []).map((item, index) => ({
+    id: Number(item.id || 0),
+    name: String(item.name || "").trim(),
+    quantity: Number(item.quantity || 0),
+    unit: String(item.unit || "").trim(),
+    checked: !!item.checked,
+    sort_order: Number(item.sort_order ?? index),
+    show_quantity: item.show_quantity !== false,
+  }));
 }
 
 function sortedShoppingItems() {
   return state.shopping
     .slice()
     .sort((a, b) => {
-      if (a.__checked !== b.__checked) return a.__checked ? 1 : -1;
-      return a.__order - b.__order;
+      if (a.checked !== b.checked) return a.checked ? 1 : -1;
+      if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+      return a.name.localeCompare(b.name);
     });
 }
 
@@ -211,7 +292,8 @@ function updateRangePreview() {
   const start = document.getElementById("start-date").value;
   const end = document.getElementById("end-date").value;
   if (!start || !end) return;
-  document.getElementById("range-preview").textContent = `Periode: ${formatDateEu(start)} - ${formatDateEu(end)} (start maandag)`;
+  const [from, to] = start <= end ? [start, end] : [end, start];
+  document.getElementById("range-preview").textContent = `Van ${weekdayName(from)} ${formatDateEu(from)} tot en met ${weekdayName(to)} ${formatDateEu(to)}`;
 }
 
 function bindTabs() {
@@ -223,6 +305,7 @@ function bindTabs() {
       tab.classList.add("active");
       document.querySelectorAll(".tab-panel").forEach((panel) => panel.classList.remove("active"));
       document.getElementById(`tab-${target}`).classList.add("active");
+      localStorage.setItem(activeTabStorageKey, target);
     });
   });
 }
@@ -295,17 +378,38 @@ async function fetchProfileSettings() {
   document.getElementById("profile-admin").textContent = data.auth?.admin_email || "-";
   const allowed = data.auth?.allowed_emails || [];
   document.getElementById("profile-allowed").textContent = allowed.length ? allowed.join(", ") : "-";
+  const adminPanel = document.getElementById("profile-admin-settings");
+  const globalPanel = document.getElementById("profile-global-settings");
+  if (adminPanel) adminPanel.hidden = !Boolean(data.is_admin);
+  if (globalPanel) globalPanel.hidden = !Boolean(data.is_admin);
 
   const baseServings = data.app?.base_servings || 2;
   if (!document.getElementById("person-count").value) {
     document.getElementById("person-count").value = String(baseServings);
   }
 
-  state.profileAllergies = data.profile?.allergies || [];
-  document.getElementById("profile-allergies").value = state.profileAllergies.join(", ");
-  document.getElementById("profile-likes").value = (data.profile?.likes || []).join(", ");
+  setProfileChipState("allergies", data.profile?.allergies || []);
+  setProfileChipState("likes", data.profile?.likes || []);
+  setProfileChipState("dislikes", data.profile?.dislikes || []);
+  renderProfileChips("allergies");
+  renderProfileChips("likes");
+  renderProfileChips("dislikes");
   state.profileMenuMode = data.profile?.menu_mode || "ai_only";
   state.customMealsCount = Number(data.profile?.custom_meals_count || 0);
+
+  document.getElementById("profile-admin-email").value = data.auth?.admin_email || "";
+  document.getElementById("profile-admin-name").value = data.auth?.admin_email || "";
+  document.getElementById("profile-admin-password").value = "";
+  document.getElementById("profile-allowed-emails").value = (data.auth?.allowed_emails || []).join("\n");
+  document.getElementById("profile-nutrition-protein-weight").value = String(data.nutrition?.high_protein_weight ?? 1.3);
+  document.getElementById("profile-nutrition-carb-weight").value = String(data.nutrition?.low_carb_weight ?? 1.1);
+  document.getElementById("profile-nutrition-min-fish").value = String(data.nutrition?.weekly_min_fish ?? 0);
+  document.getElementById("profile-nutrition-west-pref").value = String(data.nutrition?.west_europe_preference ?? 2.2);
+  document.getElementById("profile-nutrition-asian-penalty").value = String(data.nutrition?.asian_penalty ?? 2.8);
+  document.getElementById("profile-family-allergies").value = (data.family?.allergies || []).join("\n");
+  document.getElementById("profile-family-likes").value = (data.family?.likes || []).join("\n");
+  document.getElementById("profile-family-dislikes").value = (data.family?.dislikes || []).join("\n");
+
   updateProfileMenuModeOptions();
 }
 
@@ -326,19 +430,55 @@ function updateProfileMenuModeOptions() {
   select.value = mode;
 
   help.textContent = `Je hebt momenteel ${count} eigen ${count === 1 ? "maaltijd" : "maaltijden"}.`;
+  updateProfilePreferencesHint();
+}
+
+function updateProfilePreferencesHint() {
+  const note = document.getElementById("profile-ai-optional-note");
+  const select = document.getElementById("profile-menu-mode");
+  const prefs = document.getElementById("profile-ai-preferences");
+  if (!note || !select) return;
+  const aiAllowed = select.value !== "custom_only";
+  if (prefs) prefs.hidden = !aiAllowed;
+  note.textContent = aiAllowed
+    ? "Allergieën, favorieten en afkeur zijn optioneel zolang AI-maaltijden toegelaten zijn."
+    : "Je gebruikt nu alleen eigen maaltijden. Deze voorkeuren zijn niet verplicht en worden enkel gebruikt zodra AI weer aan staat.";
 }
 
 async function saveProfileAllergies() {
-  const raw = document.getElementById("profile-allergies").value;
-  const allergies = splitCsvText(raw).map((item) => item.toLowerCase());
-  const likesRaw = document.getElementById("profile-likes").value;
-  const likes = splitCsvText(likesRaw).map((item) => item.toLowerCase());
+  const allergies = (state.profileAllergies || []).map((item) => item.toLowerCase());
+  const likes = (state.profileLikes || []).map((item) => item.toLowerCase());
+  const dislikes = (state.profileDislikes || []).map((item) => item.toLowerCase());
   const menu_mode = document.getElementById("profile-menu-mode").value;
+
+  const payload = { allergies, likes, dislikes, menu_mode };
+  if (state.user?.is_admin) {
+    payload.global = {
+      nutrition: {
+        high_protein_weight: Number(document.getElementById("profile-nutrition-protein-weight").value || 1.3),
+        low_carb_weight: Number(document.getElementById("profile-nutrition-carb-weight").value || 1.1),
+        weekly_min_fish: Number(document.getElementById("profile-nutrition-min-fish").value || 0),
+        west_europe_preference: Number(document.getElementById("profile-nutrition-west-pref").value || 2.2),
+        asian_penalty: Number(document.getElementById("profile-nutrition-asian-penalty").value || 2.8),
+      },
+      family: {
+        allergies: splitLinesText(document.getElementById("profile-family-allergies").value),
+        likes: splitLinesText(document.getElementById("profile-family-likes").value),
+        dislikes: splitLinesText(document.getElementById("profile-family-dislikes").value),
+      },
+      auth: {
+        admin_email: (document.getElementById("profile-admin-email").value || "").trim().toLowerCase(),
+        admin_name: (document.getElementById("profile-admin-name").value || "").trim(),
+        admin_password: document.getElementById("profile-admin-password").value || "",
+        allowed_emails: splitLinesText(document.getElementById("profile-allowed-emails").value),
+      },
+    };
+  }
 
   const res = await fetch("/api/profile", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ allergies, likes, menu_mode }),
+    body: JSON.stringify(payload),
   });
 
   const status = document.getElementById("profile-save-status");
@@ -353,10 +493,19 @@ async function saveProfileAllergies() {
   }
 
   const data = await res.json();
-  state.profileAllergies = data.allergies || [];
-  document.getElementById("profile-likes").value = (data.likes || []).join(", ");
+  setProfileChipState("allergies", data.allergies || []);
+  setProfileChipState("likes", data.likes || []);
+  setProfileChipState("dislikes", data.dislikes || []);
+  renderProfileChips("allergies");
+  renderProfileChips("likes");
+  renderProfileChips("dislikes");
   state.profileMenuMode = data.menu_mode || state.profileMenuMode;
   state.customMealsCount = Number(data.custom_meals_count || state.customMealsCount || 0);
+  if (data.global?.auth) {
+    document.getElementById("profile-admin").textContent = data.global.auth.admin_email || "-";
+    document.getElementById("profile-allowed").textContent = (data.global.auth.allowed_emails || []).join(", ") || "-";
+    document.getElementById("profile-admin-password").value = "";
+  }
   updateProfileMenuModeOptions();
   status.textContent = "Opgeslagen.";
   setTimeout(() => {
@@ -512,6 +661,35 @@ async function uploadBulkTemplate() {
   await loadCustomMeals();
 }
 
+async function exportBulkTemplate() {
+  const status = document.getElementById("cm-bulk-status");
+  const res = await fetch("/api/custom-meals/export");
+  if (!res.ok) {
+    status.textContent = "Bulk export mislukt.";
+    return;
+  }
+
+  const payload = await res.json();
+  const items = payload.items || [];
+  const text = JSON.stringify(items, null, 2);
+  const blob = new Blob([text], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  const filename = `custom-meals-${stamp}.json`;
+
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+  status.textContent = `${items.length} gerechten geëxporteerd.`;
+  setTimeout(() => {
+    status.textContent = "";
+  }, 2000);
+}
+
 async function createCustomMeal() {
   const payload = {
     name: document.getElementById("cm-name").value.trim(),
@@ -601,7 +779,7 @@ async function loadCalendar() {
   state.days = data.days || [];
 
   const plannedFromCalendar = state.days
-    .filter((day) => day.meal_name)
+    .filter((day) => day.cook && day.meal_name)
     .map((day) => ({
       date: day.date,
       meal_name: day.meal_name,
@@ -610,9 +788,7 @@ async function loadCalendar() {
       explanation: "Geplande maaltijd.",
     }));
 
-  if (!state.plan.length) {
-    state.plan = plannedFromCalendar;
-  }
+  state.plan = plannedFromCalendar;
 
   updateRangePreview();
   renderCalendar();
@@ -687,6 +863,8 @@ function renderCalendar() {
         const idx = state.plan.findIndex((p) => p.date === item.date);
         if (idx >= 0) state.plan[idx] = item;
         else state.plan.push(item);
+        state.shopping = [];
+        renderShopping();
       }
 
       await loadCalendar();
@@ -709,7 +887,6 @@ function renderMenuGallery() {
   state.plan
     .slice()
     .sort((a, b) => a.date.localeCompare(b.date))
-    .slice(0, 4)
     .forEach((item) => {
       const hasMealId = !!item.meal_id;
       const card = document.createElement(hasMealId ? "a" : "article");
@@ -796,18 +973,30 @@ function renderShopping() {
 
   ordered.forEach((item, idx) => {
     const li = document.createElement("li");
-    li.className = item.__checked ? "shopping-item checked" : "shopping-item";
+    li.className = item.checked ? "shopping-item checked" : "shopping-item";
+    const qtyText = item.show_quantity ? `${prettyQuantity(item.quantity)} ${item.unit}`.trim() : "";
     li.innerHTML = `
       <label class="shop-checkline">
-        <input type="checkbox" ${item.__checked ? "checked" : ""} />
+        <input type="checkbox" ${item.checked ? "checked" : ""} />
         <span class="shop-text">${item.name}</span>
       </label>
-      <strong class="shop-qty">${prettyQuantity(item.quantity)} ${item.unit}</strong>
+      <strong class="shop-qty">${qtyText}</strong>
     `;
 
     const checkbox = li.querySelector("input[type='checkbox']");
-    checkbox.addEventListener("change", () => {
-      item.__checked = checkbox.checked;
+    checkbox.addEventListener("change", async () => {
+      checkbox.disabled = true;
+      const res = await fetch(`/api/shopping-list/${encodeURIComponent(String(item.id))}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ checked: checkbox.checked }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        state.shopping = normalizeShoppingItems(data.items || []);
+      } else {
+        checkbox.checked = !checkbox.checked;
+      }
       renderShopping();
     });
 
@@ -815,8 +1004,9 @@ function renderShopping() {
 
     if (sideList && idx < 6) {
       const sli = document.createElement("li");
-      sli.className = item.__checked ? "checked" : "";
-      sli.innerHTML = `<span>${item.name}</span><strong>${prettyQuantity(item.quantity)} ${item.unit}</strong>`;
+      sli.className = item.checked ? "checked" : "";
+      const sideQty = item.show_quantity ? `${prettyQuantity(item.quantity)} ${item.unit}`.trim() : "";
+      sli.innerHTML = `<span>${item.name}</span><strong>${sideQty}</strong>`;
       sideList.appendChild(sli);
     }
   });
@@ -825,16 +1015,14 @@ function renderShopping() {
 function renderDashboard() {
   const cookDays = state.days.filter((d) => d.cook).length;
   const skipDays = state.days.filter((d) => !d.cook).length;
-  const planned = state.days.filter((d) => d.meal_name).length;
+  const planned = state.days.filter((d) => d.cook && d.meal_name).length;
   const fishMeals = state.days.filter((d) => isFishMeal(d.meal_name)).length;
-  const completion = cookDays === 0 ? 0 : Math.round((planned / cookDays) * 100);
 
   document.getElementById("metric-cook-days").textContent = String(cookDays);
   document.getElementById("metric-skip-days").textContent = String(skipDays);
   document.getElementById("metric-planned").textContent = String(planned);
   document.getElementById("metric-fish").textContent = String(fishMeals);
-  document.getElementById("metric-completion").textContent = `${completion}%`;
-  document.getElementById("completion-bar").style.width = `${Math.min(completion, 100)}%`;
+  document.getElementById("cook-days-summary").textContent = `${cookDays} ${cookDays === 1 ? "dag" : "dagen"} zelf koken`;
 }
 
 async function generateMeals() {
@@ -844,16 +1032,28 @@ async function generateMeals() {
     options: getMealOptions(),
   };
 
-  const res = await fetch("/api/generate", {
+  let res = await fetch("/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+  if (res.status === 409) {
+    const prompt = await res.json();
+    const ok = window.confirm(prompt.error || "Er bestaat al een menu. Opnieuw genereren?");
+    if (!ok) return;
+    res = await fetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, force: true }),
+    });
+  }
+  if (!res.ok) return;
   const data = await res.json();
   state.plan = data.plan || [];
+  state.shopping = [];
 
   renderPlan();
-  activateTab("dashboard");
+  renderShopping();
   await loadCalendar();
 }
 
@@ -873,7 +1073,23 @@ async function generateShoppingList() {
   state.shopping = normalizeShoppingItems(data.items || []);
 
   renderShopping();
-  activateTab("shopping");
+}
+
+async function loadShoppingList() {
+  const res = await fetch("/api/shopping-list");
+  if (!res.ok) return;
+  const data = await res.json();
+  state.shopping = normalizeShoppingItems(data.items || []);
+  renderShopping();
+}
+
+async function clearShoppingList() {
+  const res = await fetch("/api/shopping-list", {
+    method: "DELETE",
+  });
+  if (!res.ok) return;
+  state.shopping = [];
+  renderShopping();
 }
 
 function addExtraShoppingItem() {
@@ -886,34 +1102,39 @@ function addExtraShoppingItem() {
 
   const quantity = Number(qtyEl.value || 1);
   const unit = (unitEl.value || "stuk").trim();
-  const nextOrder = state.shopping.length
-    ? Math.max(...state.shopping.map((i) => i.__order || 0)) + 1
-    : 0;
 
-  state.shopping.push(
-    shoppingUiItem(
-      { name, quantity, unit },
-      nextOrder,
-      {},
-    ),
-  );
-
-  nameEl.value = "";
-  qtyEl.value = "";
-  unitEl.value = "";
-  renderShopping();
+  fetch("/api/shopping-list/items", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, quantity, unit }),
+  }).then(async (res) => {
+    if (!res.ok) return;
+    const data = await res.json();
+    state.shopping = normalizeShoppingItems(data.items || []);
+    nameEl.value = "";
+    qtyEl.value = "";
+    unitEl.value = "";
+    renderShopping();
+  });
 }
 
 async function boot() {
   initSidebarToggle();
   initCustomMealUpload();
+  initProfileChipField("allergies");
+  initProfileChipField("likes");
+  initProfileChipField("dislikes");
   bindTabs();
+  const savedTab = localStorage.getItem(activeTabStorageKey);
+  if (savedTab) {
+    activateTab(savedTab);
+  }
   setDefaultDates();
   await fetchSession();
   await fetchProfileSettings();
   await loadCustomMeals();
   await loadCalendar();
-  renderShopping();
+  await loadShoppingList();
 
   document.getElementById("start-date").addEventListener("change", async () => {
     updateRangePreview();
@@ -928,15 +1149,15 @@ async function boot() {
   document.getElementById("generate-btn").addEventListener("click", generateMeals);
   document.getElementById("shopping-btn").addEventListener("click", generateShoppingList);
   document.getElementById("shopping-refresh-btn").addEventListener("click", generateShoppingList);
-  document.getElementById("hero-generate-btn").addEventListener("click", async () => {
-    activateTab("planner");
-    await generateMeals();
-  });
+  document.getElementById("shopping-clear-btn").addEventListener("click", clearShoppingList);
+  document.getElementById("hero-generate-btn").addEventListener("click", generateMeals);
   document.getElementById("hero-shopping-btn").addEventListener("click", generateShoppingList);
   document.getElementById("save-profile-btn").addEventListener("click", saveProfileAllergies);
+  document.getElementById("profile-menu-mode").addEventListener("change", updateProfilePreferencesHint);
   document.getElementById("cm-save-btn").addEventListener("click", createCustomMeal);
   document.getElementById("cm-delete-btn").addEventListener("click", deleteSelectedCustomMeals);
   document.getElementById("cm-bulk-toggle-btn").addEventListener("click", toggleBulkPanel);
+  document.getElementById("cm-bulk-export-btn").addEventListener("click", exportBulkTemplate);
   document.getElementById("cm-bulk-upload-btn").addEventListener("click", uploadBulkTemplate);
   document.getElementById("add-extra-item-btn").addEventListener("click", addExtraShoppingItem);
   document.getElementById("user-info").addEventListener("click", (event) => {

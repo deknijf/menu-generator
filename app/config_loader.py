@@ -21,16 +21,6 @@ DEFAULT_SETTINGS = {
             }
         ],
     },
-    "nutrition": {
-        "high_protein_weight": 1.3,
-        "low_carb_weight": 1.1,
-        "weekly_min_fish": 0,
-    },
-    "family": {
-        "allergies": ["peanut", "shellfish"],
-        "likes": ["mediterranean", "asian", "chicken", "fish"],
-        "dislikes": [],
-    },
 }
 
 

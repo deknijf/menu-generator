@@ -4,9 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Meal Planner</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="/static/styles.css?v=20260208v" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260209v9" />
 </head>
 <body>
   <div class="app-layout">
@@ -123,12 +124,11 @@
 
         <section class="card progress-card">
           <div>
-            <h3>Periode-overzicht</h3>
+            <h3>Week planning</h3>
             <p id="range-preview" class="muted"></p>
           </div>
           <div class="progress-wrap">
-            <p class="progress-value" id="metric-completion">0%</p>
-            <div class="progress-track"><span id="completion-bar"></span></div>
+            <p class="progress-value" id="cook-days-summary">0 dagen zelf koken</p>
           </div>
         </section>
 
@@ -186,7 +186,10 @@
         <section class="card">
           <div class="side-card-head">
             <h3>Boodschappenlijst</h3>
-            <button class="mini-link" id="shopping-refresh-btn" type="button">Refresh</button>
+            <div class="side-card-actions">
+              <button class="mini-link" id="shopping-clear-btn" type="button">Verwijder alles</button>
+              <button class="mini-link" id="shopping-refresh-btn" type="button">Refresh</button>
+            </div>
           </div>
           <div class="shopping-tools">
             <input type="text" id="extra-item-name" placeholder="Extra item (bv. water)" />
@@ -260,16 +263,18 @@
               <h3>Mijn maaltijden</h3>
               <div class="my-meals-actions">
                 <button id="cm-bulk-toggle-btn" class="btn btn-primary" type="button">Bulk upload</button>
+                <button id="cm-bulk-export-btn" class="btn btn-primary" type="button">Bulk export</button>
                 <button id="cm-delete-btn" class="btn btn-primary" type="button" disabled>Verwijder</button>
               </div>
             </div>
             <section id="cm-bulk-panel" class="bulk-panel" hidden>
-              <p class="muted"><strong>Template (JSON):</strong> plak een lijst van gerechten. Elk gerecht bevat minstens <code>name</code>, <code>ingredients</code> en optioneel <code>preparation</code>, <code>tags</code>, <code>allergens</code>, <code>protein</code>, <code>carbs</code>, <code>calories</code>, <code>rotation_limit</code>.</p>
+              <p class="muted"><strong>Template (JSON):</strong> plak een lijst van gerechten. Elk gerecht bevat minstens <code>name</code>, <code>ingredients</code> en optioneel <code>description</code>, <code>image_url</code>, <code>rating</code>, <code>preparation</code>, <code>tags</code>, <code>allergens</code>, <code>protein</code>, <code>carbs</code>, <code>calories</code>, <code>rotation_limit</code>.</p>
               <p class="muted">Voor ingrediënten: <code>[{"name":"kipfilet","quantity":600,"unit":"g"}]</code>. Voor bereiding: <code>["Stap 1", "Stap 2"]</code>.</p>
               <textarea id="cm-bulk-json" rows="10" spellcheck="false">[
   {
     "name": "Kip met groenten",
     "description": "Snelle doordeweekse maaltijd",
+    "rating": 4,
     "tags": ["chicken", "high-protein"],
     "allergens": [],
     "ingredients": [
@@ -308,15 +313,7 @@
           </div>
 
           <div class="profile-editor">
-            <h4>Persoonlijke allergieen</h4>
-            <p class="muted">Gescheiden door komma's. Wordt meegenomen in menu-generatie.</p>
-            <textarea id="profile-allergies" rows="3" placeholder="bv. lactose, soy"></textarea>
-
-            <h4 style="margin-top:0.8rem;">Wat eten we graag</h4>
-            <p class="muted">Geef favoriete ingrediënten of keukens op (komma-gescheiden) om de suggesties te sturen.</p>
-            <textarea id="profile-likes" rows="3" placeholder="bv. pasta, rijst, kip, mediterraans"></textarea>
-
-            <h4 style="margin-top:0.8rem;">Menu maken</h4>
+            <h4>Menu maken</h4>
             <p class="muted">Kies hoe je weekmenu opgebouwd wordt. Voor optie 2 is minstens 1 eigen maaltijd nodig, voor optie 3 minstens 8.</p>
             <select id="profile-menu-mode">
               <option value="ai_only">Alleen AI gegenereerde maaltijden</option>
@@ -324,6 +321,77 @@
               <option value="custom_only">Alleen eigen maaltijden</option>
             </select>
             <p id="profile-menu-mode-help" class="muted"></p>
+            <p id="profile-ai-optional-note" class="muted"></p>
+
+            <div id="profile-admin-settings" class="profile-settings-grid">
+              <div class="chip-field">
+                <h4>Admin account (globaal)</h4>
+                <label for="profile-admin-email">Admin e-mail</label>
+                <input id="profile-admin-email" type="email" placeholder="admin@example.com" />
+                <label for="profile-admin-name">Admin naam</label>
+                <input id="profile-admin-name" type="text" placeholder="Naam" />
+                <label for="profile-admin-password">Nieuw admin wachtwoord</label>
+                <input id="profile-admin-password" type="password" placeholder="Laat leeg om niet te wijzigen" />
+              </div>
+
+              <div class="chip-field">
+                <h4>Toegelaten accounts (globaal)</h4>
+                <p class="muted">Eén e-mail per lijn. Admin e-mail wordt automatisch toegevoegd.</p>
+                <textarea id="profile-allowed-emails" rows="5" placeholder="user1@example.com&#10;user2@example.com"></textarea>
+              </div>
+            </div>
+
+            <div id="profile-global-settings" class="profile-settings-grid">
+              <div class="chip-field">
+                <h4>Nutrition (globaal)</h4>
+                <label for="profile-nutrition-protein-weight">high_protein_weight</label>
+                <input id="profile-nutrition-protein-weight" type="number" step="0.1" />
+                <label for="profile-nutrition-carb-weight">low_carb_weight</label>
+                <input id="profile-nutrition-carb-weight" type="number" step="0.1" />
+                <label for="profile-nutrition-min-fish">weekly_min_fish</label>
+                <input id="profile-nutrition-min-fish" type="number" step="1" min="0" />
+                <label for="profile-nutrition-west-pref">west_europe_preference</label>
+                <input id="profile-nutrition-west-pref" type="number" step="0.1" />
+                <label for="profile-nutrition-asian-penalty">asian_penalty</label>
+                <input id="profile-nutrition-asian-penalty" type="number" step="0.1" />
+              </div>
+
+              <div class="chip-field">
+                <h4>Family voorkeuren (globaal)</h4>
+                <label for="profile-family-allergies">allergies (1 per lijn)</label>
+                <textarea id="profile-family-allergies" rows="4" placeholder="peanut&#10;shellfish"></textarea>
+                <label for="profile-family-likes">likes (1 per lijn)</label>
+                <textarea id="profile-family-likes" rows="4" placeholder="mediterranean&#10;fish"></textarea>
+                <label for="profile-family-dislikes">dislikes (1 per lijn)</label>
+                <textarea id="profile-family-dislikes" rows="4"></textarea>
+              </div>
+            </div>
+
+            <div id="profile-ai-preferences" class="profile-preferences-grid">
+              <div class="chip-field">
+                <h4>Allergieën</h4>
+                <p class="muted">Optioneel. Typ een woord en druk op spatie.</p>
+                <div id="profile-allergies-chips" class="chips-input" data-field="allergies">
+                  <input id="profile-allergies-input" type="text" placeholder="bv. lactose" />
+                </div>
+              </div>
+
+              <div class="chip-field">
+                <h4>Favoriet eten</h4>
+                <p class="muted">Optioneel. Ingrediënten of keukens die je vaker wil.</p>
+                <div id="profile-likes-chips" class="chips-input" data-field="likes">
+                  <input id="profile-likes-input" type="text" placeholder="bv. kip" />
+                </div>
+              </div>
+
+              <div class="chip-field">
+                <h4>Eten dat je niet graag eet</h4>
+                <p class="muted">Optioneel. Deze items krijgen een lagere score.</p>
+                <div id="profile-dislikes-chips" class="chips-input" data-field="dislikes">
+                  <input id="profile-dislikes-input" type="text" placeholder="bv. paddenstoelen" />
+                </div>
+              </div>
+            </div>
 
             <div class="button-row">
               <button id="save-profile-btn" class="btn btn-primary" type="button">Bewaar voorkeuren</button>
@@ -335,6 +403,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260208v"></script>
+  <script src="/static/app.js?v=20260209v13"></script>
 </body>
 </html>

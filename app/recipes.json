@@ -2,7 +2,7 @@
   {
     "id": "grilled_chicken_salad",
     "name": "Gegrilde kip met salade",
-    "tags": ["chicken", "high-protein", "low-carb", "mediterranean"],
+    "tags": ["chicken", "high-protein", "low-carb", "mediterranean", "west-europe"],
     "allergens": [],
     "nutrition": {"protein": 42, "carbs": 18, "calories": 520},
     "ingredients": [
@@ -15,7 +15,7 @@
   {
     "id": "salmon_broccoli",
     "name": "Zalm met broccoli en citroen",
-    "tags": ["fish", "high-protein", "low-carb"],
+    "tags": ["fish", "high-protein", "low-carb", "west-europe"],
     "allergens": ["fish"],
     "nutrition": {"protein": 38, "carbs": 12, "calories": 480},
     "ingredients": [
@@ -39,7 +39,7 @@
   {
     "id": "beef_zoodles",
     "name": "Runderreepjes met courgetti",
-    "tags": ["high-protein", "low-carb"],
+    "tags": ["high-protein", "low-carb", "west-europe"],
     "allergens": [],
     "nutrition": {"protein": 40, "carbs": 16, "calories": 530},
     "ingredients": [
@@ -51,7 +51,7 @@
   {
     "id": "lentil_chicken_soup",
     "name": "Linzensoep met kip",
-    "tags": ["chicken", "high-protein"],
+    "tags": ["chicken", "high-protein", "west-europe"],
     "allergens": [],
     "nutrition": {"protein": 33, "carbs": 35, "calories": 550},
     "ingredients": [
@@ -63,7 +63,7 @@
   {
     "id": "cod_spinach",
     "name": "Kabeljauw met spinazie",
-    "tags": ["fish", "high-protein", "low-carb"],
+    "tags": ["fish", "high-protein", "low-carb", "west-europe"],
     "allergens": ["fish"],
     "nutrition": {"protein": 41, "carbs": 10, "calories": 430},
     "ingredients": [
@@ -75,7 +75,7 @@
   {
     "id": "chicken_pasta",
     "name": "Volkoren pasta met kip en tomaat",
-    "tags": ["chicken", "high-protein", "balanced-carb", "mediterranean"],
+    "tags": ["chicken", "high-protein", "balanced-carb", "mediterranean", "west-europe"],
     "allergens": ["gluten"],
     "nutrition": {"protein": 36, "carbs": 47, "calories": 640},
     "ingredients": [
@@ -99,7 +99,7 @@
   {
     "id": "baked_potato_cod",
     "name": "Kabeljauw met krieltjes en boontjes",
-    "tags": ["fish", "high-protein", "balanced-carb"],
+    "tags": ["fish", "high-protein", "balanced-carb", "west-europe"],
     "allergens": ["fish"],
     "nutrition": {"protein": 38, "carbs": 44, "calories": 610},
     "ingredients": [
@@ -111,7 +111,7 @@
   {
     "id": "spaghetti_bolognaise",
     "name": "Spaghetti bolognaise",
-    "tags": ["pasta", "balanced-carb", "heavy", "favorite"],
+    "tags": ["pasta", "balanced-carb", "heavy", "favorite", "west-europe"],
     "rotation_limit": "1_per_month",
     "allergens": ["gluten"],
     "nutrition": {"protein": 32, "carbs": 68, "calories": 760},

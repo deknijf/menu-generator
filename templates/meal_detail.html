@@ -4,7 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{ recipe.name }} · Meal Planner</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260208v" />
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260210v1" />
 </head>
 <body class="detail-page">
   <main class="detail-shell">
@@ -21,9 +22,31 @@
       </div>
     </header>
 
-    <form id="detail-form" class="detail-edit-form" data-meal-id="{{ meal_id }}" data-editable="{{ '1' if editable else '0' }}">
+    <form
+      id="detail-form"
+      class="detail-edit-form"
+      data-meal-id="{{ meal_id }}"
+      data-editable="{{ '1' if editable else '0' }}"
+      data-rating="{{ recipe.rating or 3 }}"
+    >
       <section class="card detail-hero">
-        <img id="detail-image" src="{{ meal_image }}" alt="{{ recipe.name }}" onerror="this.onerror=null;this.src='https://images.unsplash.com/photo-1498837167922-ddd27525d352?auto=format&fit=crop&w=1200&q=80';" />
+        <div class="detail-media-column">
+          <img id="detail-image" src="{{ meal_image }}" alt="{{ recipe.name }}" onerror="this.onerror=null;this.src='https://images.unsplash.com/photo-1498837167922-ddd27525d352?auto=format&fit=crop&w=1200&q=80';" />
+          <input id="detail-photo-file" type="file" accept="image/*" hidden />
+          <div class="detail-photo-actions">
+            <button
+              id="detail-photo-upload-btn"
+              class="btn btn-primary"
+              type="button"
+              {% if not editable %}disabled title="Alleen eigen gerechten zijn bewerkbaar"{% endif %}
+            >Eigen foto uploaden</button>
+          </div>
+          <div class="detail-rating-wrap" aria-label="Gerecht rating">
+            <div class="detail-rating-label">Rating</div>
+            <div id="detail-rating-stars" class="detail-rating-stars" role="radiogroup" aria-label="Rating 1 tot 5 sterren"></div>
+            <div id="detail-rating-note" class="muted">Meer sterren = vaker in weekmenu.</div>
+          </div>
+        </div>
         <div class="detail-form-grid">
           <label>Naam <input id="f-name" type="text" value="{{ recipe.name }}" disabled /></label>
           <label>Beschrijving <input id="f-description" type="text" value="{{ recipe.description or '' }}" disabled /></label>
@@ -55,13 +78,13 @@
       <section class="detail-grid">
         <article class="card detail-card">
           <h3>Ingredienten en details</h3>
-          <textarea id="f-ingredients" rows="10" disabled>{% for ing in recipe.ingredients or [] %}{{ ing.name }}, {{ ing.quantity }}, {{ ing.unit }}{% if not loop.last %}
+          <textarea id="f-ingredients" class="detail-textarea-rich" rows="12" disabled>{% for ing in recipe.ingredients or [] %}{{ ing.name }}, {{ ing.quantity }}, {{ ing.unit }}{% if not loop.last %}
 {% endif %}{% endfor %}</textarea>
         </article>
 
         <article class="card detail-card">
           <h3>Bereidingswijze</h3>
-          <textarea id="f-preparation" rows="10" disabled>{% for step in steps %}{{ step }}{% if not loop.last %}
+          <textarea id="f-preparation" class="detail-textarea-rich" rows="12" disabled>{% for step in steps %}{{ step }}{% if not loop.last %}
 {% endif %}{% endfor %}</textarea>
         </article>
       </section>
@@ -75,10 +98,15 @@
       const status = document.getElementById("detail-save-status");
       const image = document.getElementById("detail-image");
       const imageUrlInput = document.getElementById("f-image-url");
+      const photoFileInput = document.getElementById("detail-photo-file");
+      const uploadBtn = document.getElementById("detail-photo-upload-btn");
+      const starsWrap = document.getElementById("detail-rating-stars");
+      const ratingNote = document.getElementById("detail-rating-note");
       if (!form || !editBtn) return;
 
       const editable = form.dataset.editable === "1";
       let editing = false;
+      let rating = Math.max(1, Math.min(5, Number(form.dataset.rating || 3)));
 
       function splitCsv(value) {
         return (value || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
@@ -108,15 +136,87 @@
         editing = next;
         const fields = form.querySelectorAll("input, textarea, select");
         fields.forEach((field) => {
+          if (field.id === "detail-photo-file") return;
           field.disabled = !editing;
         });
         editBtn.textContent = editing ? "Save" : "Edit";
+      }
+
+      function renderStars() {
+        if (!starsWrap) return;
+        starsWrap.innerHTML = "";
+        for (let i = 1; i <= 5; i += 1) {
+          const star = document.createElement("button");
+          star.type = "button";
+          star.className = "detail-star-btn" + (i <= rating ? " active" : "");
+          star.textContent = "★";
+          star.setAttribute("aria-label", `${i} sterren`);
+          star.setAttribute("aria-checked", String(i === rating));
+          if (!editable) {
+            star.disabled = true;
+          }
+          star.addEventListener("click", () => {
+            if (!editable) return;
+            setRating(i);
+          });
+          starsWrap.appendChild(star);
+        }
+      }
+
+      async function setRating(nextRating) {
+        rating = Math.max(1, Math.min(5, Number(nextRating || 3)));
+        renderStars();
+        if (!editable) return;
+        try {
+          const res = await fetch(`/api/custom-meals/${encodeURIComponent(form.dataset.mealId)}/rating`, {
+            method: "PUT",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ rating }),
+          });
+          if (!res.ok) throw new Error("save-failed");
+          ratingNote.textContent = `Rating opgeslagen: ${rating}/5`;
+          setTimeout(() => { ratingNote.textContent = "Meer sterren = vaker in weekmenu."; }, 1400);
+        } catch (_) {
+          ratingNote.textContent = "Rating opslaan mislukt.";
+        }
+      }
+
+      async function uploadPhoto(file) {
+        const body = new FormData();
+        body.append("photo", file);
+        const res = await fetch(`/api/custom-meals/${encodeURIComponent(form.dataset.mealId)}/photo`, {
+          method: "POST",
+          body,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          status.textContent = data.error || "Foto uploaden mislukt.";
+          return;
+        }
+        if (data.image_url) {
+          image.src = data.image_url;
+          imageUrlInput.value = data.image_url;
+          status.textContent = "Foto geupload.";
+        }
       }
 
       imageUrlInput.addEventListener("input", () => {
         const value = imageUrlInput.value.trim();
         if (value) image.src = value;
       });
+
+      if (uploadBtn && photoFileInput) {
+        uploadBtn.addEventListener("click", () => {
+          if (!editable) return;
+          photoFileInput.click();
+        });
+        photoFileInput.addEventListener("change", async () => {
+          const file = photoFileInput.files && photoFileInput.files[0];
+          if (!file) return;
+          await uploadPhoto(file);
+          photoFileInput.value = "";
+        });
+      }
 
       editBtn.addEventListener("click", async () => {
         if (!editable) return;
@@ -137,6 +237,7 @@
           ingredients: parseIngredients(document.getElementById("f-ingredients").value),
           preparation: splitLines(document.getElementById("f-preparation").value),
           rotation_limit: document.getElementById("f-rotation").value,
+          rating,
         };
 
         const res = await fetch(`/api/custom-meals/${encodeURIComponent(form.dataset.mealId)}`, {
@@ -154,6 +255,8 @@
         setEditing(false);
         setTimeout(() => { status.textContent = ""; }, 1500);
       });
+
+      renderStars();
     })();
   </script>
 </body>
