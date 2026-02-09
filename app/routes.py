@@ -9,6 +9,7 @@ from flask import (
     redirect,
     render_template,
     request,
+    send_from_directory,
     session,
     url_for,
 )
@@ -88,6 +89,10 @@ def _normalize_allergies(values):
         if token and token not in out:
             out.append(token)
     return out
+
+
+def _pictures_dir():
+    return Path(current_app.root_path).parent / "data" / "pictures"
 
 
 def _runtime_settings(app):
@@ -581,6 +586,12 @@ def _recipe_map_for_user(user_email):
 
 
 def register_routes(app):
+    @app.get("/pictures/<path:filename>")
+    def pictures_file(filename):
+        pictures_dir = _pictures_dir()
+        pictures_dir.mkdir(parents=True, exist_ok=True)
+        return send_from_directory(pictures_dir, filename)
+
     @app.get("/meal/<meal_id>")
     def meal_detail(meal_id):
         user = _require_auth()
@@ -1002,13 +1013,13 @@ def register_routes(app):
         if ext not in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
             ext = ".jpg"
 
-        target_dir = Path("static/uploads/custom_meals")
+        target_dir = _pictures_dir()
         target_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"{meal_token}_{uuid4().hex[:12]}{ext}"
+        filename = f"custom_{meal_token}_{uuid4().hex[:12]}{ext}"
         target_path = target_dir / filename
         photo.save(target_path)
 
-        image_url = f"/static/uploads/custom_meals/{filename}"
+        image_url = f"/pictures/{filename}"
         update_custom_meal_image(user["email"], meal_token, image_url)
         return jsonify({"ok": True, "image_url": image_url})
 
