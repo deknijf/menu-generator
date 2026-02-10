@@ -22,8 +22,16 @@ from .db import (
     clear_day_meals_between,
     clear_shopping_items,
     complete_shopping_items,
+    create_group,
+    delete_group,
+    delete_auth_user,
     get_auth_user,
+    get_group_menu_mode,
+    get_user_group_ids,
+    group_exists,
     get_runtime_settings,
+    list_auth_users,
+    list_groups,
     create_custom_meal,
     delete_shopping_item,
     delete_shopping_history_entry,
@@ -36,7 +44,6 @@ from .db import (
     get_user_allergies,
     get_user_dislikes,
     get_user_likes,
-    get_user_menu_mode,
     list_custom_meals,
     list_shopping_items,
     replace_shopping_items,
@@ -44,12 +51,16 @@ from .db import (
     set_shopping_item_checked,
     set_day_cook,
     set_day_meal,
+    set_group_menu_mode,
     set_user_allergies,
     set_user_dislikes,
     set_user_likes,
-    set_user_menu_mode,
     set_app_setting,
-    set_auth_config,
+    set_auth_user_group,
+    set_auth_user_group_admin,
+    set_auth_user_groups,
+    set_auth_user_admin,
+    update_auth_user_identity,
     update_auth_password,
     update_custom_meal,
     update_custom_meal_image,
@@ -57,6 +68,7 @@ from .db import (
     upsert_user,
     upsert_auth_user,
     verify_auth_password,
+    rename_group,
 )
 from .meal_engine import generate_plan, recipes_by_id, select_best_recipe
 
@@ -65,14 +77,23 @@ def _require_auth():
     user = session.get("user")
     if not user:
         abort(401)
+    super_admin_email = _super_admin_email(current_app)
     auth_user = get_auth_user(user.get("email", ""))
     if auth_user:
         user["name"] = auth_user.get("name", user.get("name"))
         user["is_admin"] = bool(auth_user.get("is_admin"))
+        user["is_group_admin"] = bool(auth_user.get("is_group_admin"))
+        user["group_id"] = int(auth_user.get("group_id") or 1)
+        user["group_ids"] = get_user_group_ids(user.get("email", ""))
     else:
         settings = get_runtime_settings(current_app.config.get("SETTINGS", {}))
-        admin_email = settings.get("auth", {}).get("admin_email", "")
+        admin_email = _super_admin_email(current_app)
         user["is_admin"] = user.get("email") == admin_email
+        user["is_group_admin"] = bool(user.get("is_group_admin", False))
+        user["group_id"] = int(user.get("group_id") or 1)
+        user["group_ids"] = [int(user.get("group_id") or 1)]
+    if str(user.get("email", "")).strip().lower() == super_admin_email:
+        user["is_admin"] = True
     session["user"] = user
     return user
 
@@ -104,6 +125,60 @@ def _pictures_dir():
 
 def _runtime_settings(app):
     return get_runtime_settings(app.config.get("SETTINGS", {}))
+
+
+def _super_admin_email(app):
+    base_settings = app.config.get("SETTINGS", {}) or {}
+    local_users = list((base_settings.get("auth", {}) or {}).get("local_users", []) or [])
+    if local_users:
+        first_email = str((local_users[0] or {}).get("email", "")).strip().lower()
+        if first_email:
+            return first_email
+    return str((base_settings.get("auth", {}) or {}).get("admin_email", "")).strip().lower()
+
+
+def _is_primary_admin(user, settings):
+    if not user:
+        return False
+    return str(user.get("email", "")).strip().lower() == _super_admin_email(current_app)
+
+
+def _is_group_admin(user):
+    return bool((user or {}).get("is_group_admin"))
+
+
+def _is_admin(user):
+    return bool((user or {}).get("is_admin"))
+
+
+def _can_manage_group_users(user, settings):
+    return _is_primary_admin(user, settings) or _is_admin(user) or _is_group_admin(user)
+
+
+def _can_manage_group_menu_mode(user, settings):
+    return _is_primary_admin(user, settings) or _is_admin(user) or _is_group_admin(user)
+
+
+def _can_delete_groups(user):
+    return _is_admin(user)
+
+
+def _group_name(group_id):
+    gid = int(group_id or 1)
+    for item in list_groups():
+        if int(item.get("id") or 0) == gid:
+            return str(item.get("name") or f"Groep {gid}")
+    return f"Groep {gid}"
+
+
+def _group_items_for_ids(group_ids):
+    id_set = {int(gid) for gid in (group_ids or []) if int(gid) > 0}
+    out = []
+    for item in list_groups():
+        gid = int(item.get("id") or 0)
+        if gid in id_set:
+            out.append({"id": gid, "name": str(item.get("name") or f"Groep {gid}")})
+    return out
 
 
 def _timezone_from_settings(settings):
@@ -168,7 +243,8 @@ def _normalize_menu_mode(value):
 
 
 def _effective_menu_mode(user_email):
-    requested = _normalize_menu_mode(get_user_menu_mode(user_email))
+    gid = int((get_auth_user(user_email) or {}).get("group_id") or 1)
+    requested = _normalize_menu_mode(get_group_menu_mode(gid))
     count = len(list_custom_meals(user_email))
     if requested == "custom_only" and count < 8:
         return ("ai_and_custom" if count >= 1 else "ai_only"), count
@@ -351,13 +427,13 @@ def _normalize_unit(quantity, unit):
     return qty, raw
 
 
-def _build_shopping_items(user_email, dates, person_count, base_servings):
+def _build_shopping_items(user_email, group_id, dates, person_count, base_servings):
     scale = person_count / base_servings
     recipe_map = _recipe_map_for_user(user_email)
     ingredients = {}
 
     for day in dates:
-        row = get_day(day)
+        row = get_day(group_id, day)
         if not row or not row.get("meal_id"):
             continue
 
@@ -420,8 +496,8 @@ def _normalize_stored_shopping_items(items):
     return normalized
 
 
-def _has_generated_plan_between(start, end):
-    rows = get_days_between(start, end)
+def _has_generated_plan_between(group_id, start, end):
+    rows = get_days_between(group_id, start, end)
     return any(row.get("meal_id") for row in rows)
 
 
@@ -670,6 +746,33 @@ def register_routes(app):
             entries=entries,
         )
 
+    @app.get("/account/<path:user_email>")
+    def account_detail(user_email):
+        user = _require_auth()
+        settings = _runtime_settings(app)
+        if not _can_manage_group_users(user, settings):
+            abort(403)
+        target_email = str(user_email or "").strip().lower()
+        target = get_auth_user(target_email)
+        if not target:
+            abort(404)
+        if not _is_primary_admin(user, settings):
+            gids = {int(gid) for gid in get_user_group_ids(target_email)}
+            if int(user.get("group_id") or -1) not in gids:
+                abort(403)
+        return render_template(
+            "account_detail.html",
+            user=user,
+            target=target,
+            target_group_id=int(target.get("group_id") or 1),
+            target_group_ids=get_user_group_ids(target_email),
+            groups=list_groups(),
+            can_edit_global_role=_is_primary_admin(user, settings),
+            can_delete_account=_is_admin(user),
+            primary_admin_email=_super_admin_email(app),
+            target_is_super_admin=(target_email == _super_admin_email(app)),
+        )
+
     @app.delete("/api/shopping-history/<int:entry_id>")
     def api_delete_shopping_history_entry(entry_id):
         user = _require_auth()
@@ -708,7 +811,14 @@ def register_routes(app):
         user_cfg = verify_auth_password(email, password)
         if not user_cfg:
             return redirect(url_for("login", error="Verkeerd wachtwoord"))
-        user = {"email": email, "name": user_cfg.get("name", email), "is_admin": bool(user_cfg.get("is_admin"))}
+        user = {
+            "email": email,
+            "name": user_cfg.get("name", email),
+            "is_admin": bool(user_cfg.get("is_admin")),
+            "is_group_admin": bool(user_cfg.get("is_group_admin")),
+            "group_id": int(user_cfg.get("group_id") or 1),
+            "group_ids": get_user_group_ids(email),
+        }
         session["user"] = user
         upsert_user(email, user["name"], user["is_admin"])
         return redirect(url_for("index"))
@@ -724,19 +834,28 @@ def register_routes(app):
             return "Missing email", 400
 
         allowed = {str(item).strip().lower() for item in settings["auth"].get("allowed_emails", [])}
-        admin_email = settings["auth"].get("admin_email", "").lower().strip()
+        admin_email = _super_admin_email(app)
         if email != admin_email and email not in allowed:
             return "Je account heeft geen toegang", 403
 
         is_admin = email == admin_email
-        user = {"email": email, "name": email.split("@")[0], "is_admin": is_admin}
+        existing = get_auth_user(email)
+        group_id = int(existing.get("group_id") or 1) if existing else 1
+        user = {
+            "email": email,
+            "name": email.split("@")[0],
+            "is_admin": is_admin,
+            "is_group_admin": bool(existing.get("is_group_admin")) if existing else False,
+            "group_id": group_id,
+            "group_ids": get_user_group_ids(email) if existing else [group_id],
+        }
         session["user"] = user
         upsert_user(email, user["name"], is_admin)
         return redirect(url_for("index"))
 
     @app.get("/api/session")
     def api_session():
-        user = session.get("user")
+        user = _require_auth() if session.get("user") else None
         return jsonify({"user": user})
 
     @app.get("/api/profile")
@@ -754,11 +873,19 @@ def register_routes(app):
                 "dislikes": dislikes,
                 "menu_mode": mode,
                 "custom_meals_count": count,
+                "is_primary_admin": _is_primary_admin(user, settings),
+                "is_group_admin": _is_group_admin(user),
+                "can_manage_groups": _is_admin(user),
+                "can_manage_group_users": _can_manage_group_users(user, settings),
+                "can_manage_group_menu_mode": _can_manage_group_menu_mode(user, settings),
+                "group": {"id": int(user.get("group_id") or 1), "name": _group_name(user.get("group_id"))},
+                "group_ids": [int(gid) for gid in (user.get("group_ids") or [user.get("group_id") or 1])],
+                "available_groups": list_groups() if _is_admin(user) else [],
                 "global": {
                     "nutrition": settings["nutrition"],
                     "family": settings["family"],
                     "auth": {
-                        "admin_email": settings["auth"].get("admin_email", ""),
+                        "admin_email": _super_admin_email(app),
                         "allowed_emails": settings["auth"].get("allowed_emails", []),
                     },
                 },
@@ -773,7 +900,7 @@ def register_routes(app):
         allergies = payload.get("allergies", [])
         likes = payload.get("likes", [])
         dislikes = payload.get("dislikes", [])
-        menu_mode = _normalize_menu_mode(payload.get("menu_mode", "ai_only"))
+        requested_menu_mode = _normalize_menu_mode(payload.get("menu_mode", "ai_only"))
 
         if isinstance(allergies, str):
             allergies = [part.strip() for part in allergies.split(",")]
@@ -785,7 +912,11 @@ def register_routes(app):
         allergies = _normalize_allergies(allergies)
         likes = _normalize_allergies(likes)
         dislikes = _normalize_allergies(dislikes)
-        custom_count = len(list_custom_meals(user["email"]))
+        current_menu_mode, custom_count = _effective_menu_mode(user["email"])
+        can_manage_mode = _can_manage_group_menu_mode(user, settings)
+        if requested_menu_mode != current_menu_mode and not can_manage_mode:
+            return jsonify({"error": "Alleen admin of groep-admin kan deze optie aanpassen."}), 403
+        menu_mode = requested_menu_mode if can_manage_mode else current_menu_mode
         if menu_mode == "ai_and_custom" and custom_count < 1:
             return jsonify({"error": "Voor deze optie heb je minstens 1 eigen maaltijd nodig."}), 400
         if menu_mode == "custom_only" and custom_count < 8:
@@ -794,10 +925,39 @@ def register_routes(app):
         set_user_allergies(user["email"], allergies)
         set_user_likes(user["email"], likes)
         set_user_dislikes(user["email"], dislikes)
-        set_user_menu_mode(user["email"], menu_mode)
+        set_group_menu_mode(user["group_id"], menu_mode)
 
-        if user.get("is_admin"):
-            global_payload = payload.get("global", {}) or {}
+        if _is_primary_admin(user, settings):
+            global_payload = payload.get("global")
+            if not isinstance(global_payload, dict):
+                global_payload = None
+            if not global_payload:
+                return jsonify(
+                    {
+                        "ok": True,
+                        "allergies": allergies,
+                        "likes": likes,
+                        "dislikes": dislikes,
+                        "menu_mode": menu_mode,
+                        "custom_meals_count": custom_count,
+                        "is_primary_admin": _is_primary_admin(user, settings),
+                        "is_group_admin": _is_group_admin(user),
+                        "can_manage_groups": _is_admin(user),
+                        "can_manage_group_users": _can_manage_group_users(user, settings),
+                        "can_manage_group_menu_mode": _can_manage_group_menu_mode(user, settings),
+                        "group": {"id": int(user.get("group_id") or 1), "name": _group_name(user.get("group_id"))},
+                        "group_ids": [int(gid) for gid in (user.get("group_ids") or [user.get("group_id") or 1])],
+                        "available_groups": list_groups() if _is_admin(user) else [],
+                        "global": {
+                            "nutrition": settings["nutrition"],
+                            "family": settings["family"],
+                            "auth": {
+                                "admin_email": _super_admin_email(app),
+                                "allowed_emails": settings["auth"].get("allowed_emails", []),
+                            },
+                        },
+                    }
+                )
 
             nutrition = dict(settings.get("nutrition", {}))
             nutrition.update(global_payload.get("nutrition", {}) or {})
@@ -817,7 +977,7 @@ def register_routes(app):
             }
 
             auth_payload = global_payload.get("auth", {}) or {}
-            admin_email = str(auth_payload.get("admin_email", settings["auth"].get("admin_email", ""))).strip().lower()
+            admin_email = _super_admin_email(app)
             if not admin_email:
                 return jsonify({"error": "Admin e-mail is verplicht."}), 400
             allowed_emails = auth_payload.get("allowed_emails", settings["auth"].get("allowed_emails", []))
@@ -825,10 +985,12 @@ def register_routes(app):
                 allowed_emails = [part.strip() for part in allowed_emails.split(",")]
             allowed_emails = _normalize_email_values(allowed_emails)
 
-            current_admin_email = settings["auth"].get("admin_email", "")
+            current_admin_email = _super_admin_email(app)
             admin_name = str(auth_payload.get("admin_name") or "").strip() or admin_email
             admin_password = str(auth_payload.get("admin_password") or "")
             current_admin = get_auth_user(current_admin_email)
+            admin_group_id = int((current_admin or {}).get("group_id") or user.get("group_id") or 1)
+            admin_group_admin = bool((current_admin or {}).get("is_group_admin"))
 
             if admin_email and admin_email != current_admin_email and admin_password:
                 upsert_auth_user(
@@ -837,6 +999,8 @@ def register_routes(app):
                     password=admin_password,
                     is_admin=True,
                     password_is_hash=False,
+                    group_id=admin_group_id,
+                    is_group_admin=admin_group_admin,
                 )
             elif admin_email and admin_email == current_admin_email and admin_password:
                 update_auth_password(admin_email, admin_password)
@@ -847,6 +1011,8 @@ def register_routes(app):
                     password=current_admin.get("password_hash", ""),
                     is_admin=True,
                     password_is_hash=True,
+                    group_id=admin_group_id,
+                    is_group_admin=admin_group_admin,
                 )
             else:
                 existing_admin = get_auth_user(admin_email)
@@ -857,19 +1023,14 @@ def register_routes(app):
                         password=existing_admin.get("password_hash", ""),
                         is_admin=True,
                         password_is_hash=True,
+                        group_id=int(existing_admin.get("group_id") or admin_group_id),
+                        is_group_admin=bool(existing_admin.get("is_group_admin")),
                     )
 
-            set_auth_config(admin_email, allowed_emails)
+            set_app_setting("auth", {"admin_email": admin_email, "allowed_emails": allowed_emails})
+            set_auth_user_admin(admin_email, True)
             set_app_setting("nutrition", nutrition)
             set_app_setting("family", family)
-
-            # Keep active session aligned with changed admin e-mail.
-            if user["email"] == current_admin_email and admin_email and admin_email != current_admin_email:
-                user["email"] = admin_email
-                user["is_admin"] = True
-                user["name"] = admin_name or user["name"]
-                session["user"] = user
-                upsert_user(user["email"], user["name"], True)
 
             settings = _runtime_settings(app)
 
@@ -881,16 +1042,363 @@ def register_routes(app):
                 "dislikes": dislikes,
                 "menu_mode": menu_mode,
                 "custom_meals_count": custom_count,
+                "is_primary_admin": _is_primary_admin(user, settings),
+                "is_group_admin": _is_group_admin(user),
+                "can_manage_groups": _is_admin(user),
+                "can_manage_group_users": _can_manage_group_users(user, settings),
+                "can_manage_group_menu_mode": _can_manage_group_menu_mode(user, settings),
+                "group": {"id": int(user.get("group_id") or 1), "name": _group_name(user.get("group_id"))},
                 "global": {
                     "nutrition": settings["nutrition"],
                     "family": settings["family"],
                     "auth": {
-                        "admin_email": settings["auth"].get("admin_email", ""),
+                        "admin_email": _super_admin_email(app),
                         "allowed_emails": settings["auth"].get("allowed_emails", []),
                     },
                 },
             }
         )
+
+    @app.put("/api/profile/password")
+    def api_profile_password_put():
+        user = _require_auth()
+        payload = request.get_json(force=True, silent=True) or {}
+        current_password = str(payload.get("current_password") or "")
+        new_password = str(payload.get("new_password") or "")
+        if len(new_password) < 8:
+            return jsonify({"error": "Nieuw wachtwoord moet minstens 8 tekens hebben."}), 400
+        verified = verify_auth_password(user["email"], current_password)
+        if not verified:
+            return jsonify({"error": "Huidig wachtwoord is ongeldig."}), 400
+        ok = update_auth_password(user["email"], new_password)
+        if not ok:
+            return jsonify({"error": "Wachtwoord kon niet opgeslagen worden."}), 400
+        return jsonify({"ok": True})
+
+    @app.put("/api/profile/account")
+    def api_profile_account_put():
+        user = _require_auth()
+        settings = _runtime_settings(app)
+        payload = request.get_json(force=True, silent=True) or {}
+        name = str(payload.get("name") or "").strip()
+        email = str(payload.get("email") or "").strip().lower()
+        if not email or "@" not in email:
+            return jsonify({"error": "Geldig e-mailadres is verplicht."}), 400
+        was_primary_admin = _is_primary_admin(user, settings)
+        old_email = str(user.get("email") or "").strip().lower()
+        if was_primary_admin and email != old_email:
+            return jsonify({"error": "Super admin e-mail kan niet aangepast worden."}), 400
+        ok, reason = update_auth_user_identity(user["email"], email, name)
+        if not ok:
+            if reason == "exists":
+                return jsonify({"error": "Dit e-mailadres bestaat al."}), 400
+            if reason == "not_found":
+                return jsonify({"error": "Account niet gevonden."}), 404
+            return jsonify({"error": "Profiel kon niet opgeslagen worden."}), 400
+        updated = get_auth_user(email)
+        if not updated:
+            return jsonify({"error": "Profiel kon niet geladen worden."}), 400
+        user["email"] = updated.get("email", email)
+        user["name"] = updated.get("name", name or email)
+        user["is_admin"] = bool(updated.get("is_admin"))
+        user["is_group_admin"] = bool(updated.get("is_group_admin"))
+        user["group_id"] = int(updated.get("group_id") or user.get("group_id") or 1)
+        user["group_ids"] = get_user_group_ids(user["email"])
+        session["user"] = user
+        upsert_user(user["email"], user["name"], user["is_admin"])
+        return jsonify(
+            {
+                "ok": True,
+                "user": {
+                    "email": user["email"],
+                    "name": user["name"],
+                    "is_admin": user["is_admin"],
+                    "is_group_admin": user["is_group_admin"],
+                    "group_id": user["group_id"],
+                    "group_ids": user["group_ids"],
+                },
+            }
+        )
+
+    @app.put("/api/profile/groups")
+    def api_profile_groups_put():
+        user = _require_auth()
+        settings = _runtime_settings(app)
+        if not _is_primary_admin(user, settings):
+            return jsonify({"error": "Niet toegestaan"}), 403
+        payload = request.get_json(force=True, silent=True) or {}
+        raw_group_ids = payload.get("group_ids", [])
+        if not isinstance(raw_group_ids, list):
+            return jsonify({"error": "group_ids moet een lijst zijn."}), 400
+        valid_ids = {int(group.get("id") or 0) for group in list_groups()}
+        selected = sorted({int(item) for item in raw_group_ids if int(item) in valid_ids and int(item) > 0})
+        if not selected:
+            return jsonify({"error": "Selecteer minstens 1 groep."}), 400
+        ok = set_auth_user_groups(user["email"], selected)
+        if not ok:
+            return jsonify({"error": "Groepen konden niet opgeslagen worden."}), 400
+        updated = get_auth_user(user["email"])
+        user["group_id"] = int((updated or {}).get("group_id") or user.get("group_id") or 1)
+        user["group_ids"] = get_user_group_ids(user["email"])
+        session["user"] = user
+        return jsonify({"ok": True, "group_ids": user["group_ids"], "groups": _group_items_for_ids(user["group_ids"])})
+
+    @app.get("/api/accounts")
+    def api_accounts_get():
+        user = _require_auth()
+        settings = _runtime_settings(app)
+        if not _can_manage_group_users(user, settings):
+            return jsonify({"error": "Niet toegestaan"}), 403
+        if _is_primary_admin(user, settings):
+            accounts = list_auth_users()
+        else:
+            accounts = list_auth_users(user["group_id"])
+        super_admin = _super_admin_email(app)
+        for item in accounts:
+            item["is_super_admin"] = str(item.get("email", "")).strip().lower() == super_admin
+        return jsonify({"items": accounts})
+
+    @app.post("/api/accounts")
+    def api_accounts_post():
+        user = _require_auth()
+        settings = _runtime_settings(app)
+        if not _can_manage_group_users(user, settings):
+            return jsonify({"error": "Niet toegestaan"}), 403
+
+        payload = request.get_json(force=True, silent=True) or {}
+        email = str(payload.get("email") or "").strip().lower()
+        name = str(payload.get("name") or "").strip()
+        password = str(payload.get("password") or "")
+        requested_group_id = int(payload.get("group_id") or user["group_id"] or 1)
+        if not _is_primary_admin(user, settings):
+            requested_group_id = int(user["group_id"] or 1)
+        if not email or "@" not in email:
+            return jsonify({"error": "Geldig e-mailadres is verplicht."}), 400
+        if len(password) < 8:
+            return jsonify({"error": "Wachtwoord moet minstens 8 tekens hebben."}), 400
+        if get_auth_user(email):
+            return jsonify({"error": "Account bestaat al."}), 400
+        if not group_exists(requested_group_id):
+            return jsonify({"error": "Ongeldige groep."}), 400
+
+        ok = upsert_auth_user(
+            email=email,
+            name=name or email,
+            password=password,
+            is_admin=False,
+            password_is_hash=False,
+            group_id=requested_group_id,
+            is_group_admin=False,
+        )
+        if not ok:
+            return jsonify({"error": "Account kon niet aangemaakt worden."}), 400
+        return jsonify({"ok": True})
+
+    @app.delete("/api/accounts/<path:user_email>")
+    def api_accounts_delete(user_email):
+        user = _require_auth()
+        settings = _runtime_settings(app)
+        if not _is_admin(user):
+            return jsonify({"error": "Niet toegestaan"}), 403
+        email = str(user_email or "").strip().lower()
+        if not email:
+            return jsonify({"error": "Ongeldige account"}), 400
+        primary_admin = _super_admin_email(app)
+        if email == primary_admin:
+            return jsonify({"error": "Super admin kan niet verwijderd worden."}), 400
+        target = get_auth_user(email)
+        if not target:
+            return jsonify({"error": "Account niet gevonden."}), 404
+        if (not _is_primary_admin(user, settings)) and int(target.get("group_id") or 0) != int(user["group_id"] or -1):
+            return jsonify({"error": "Niet toegestaan voor andere groep."}), 403
+        ok = delete_auth_user(email)
+        if not ok:
+            return jsonify({"error": "Account niet gevonden."}), 404
+        return jsonify({"ok": True})
+
+    @app.put("/api/accounts/<path:user_email>/group")
+    def api_accounts_set_group(user_email):
+        user = _require_auth()
+        settings = _runtime_settings(app)
+        if not _is_primary_admin(user, settings):
+            return jsonify({"error": "Niet toegestaan"}), 403
+        payload = request.get_json(force=True, silent=True) or {}
+        target_group_id = int(payload.get("group_id") or 0)
+        if target_group_id <= 0 or not group_exists(target_group_id):
+            return jsonify({"error": "Ongeldige groep"}), 400
+        email = str(user_email or "").strip().lower()
+        if not email:
+            return jsonify({"error": "Ongeldige account"}), 400
+        primary_admin = _super_admin_email(app)
+        if email == primary_admin:
+            return jsonify({"error": "Super admin groep kan hier niet gewijzigd worden."}), 400
+        ok = set_auth_user_group(email, target_group_id)
+        if not ok:
+            return jsonify({"error": "Account niet gevonden"}), 404
+        if user["email"] == email:
+            user["group_id"] = target_group_id
+            session["user"] = user
+        return jsonify({"ok": True})
+
+    @app.put("/api/accounts/<path:user_email>/group-admin")
+    def api_accounts_set_group_admin(user_email):
+        user = _require_auth()
+        settings = _runtime_settings(app)
+        if not _is_primary_admin(user, settings):
+            return jsonify({"error": "Niet toegestaan"}), 403
+        payload = request.get_json(force=True, silent=True) or {}
+        enabled = _parse_bool(payload.get("is_group_admin", False))
+        email = str(user_email or "").strip().lower()
+        if not email:
+            return jsonify({"error": "Ongeldige account"}), 400
+        primary_admin = _super_admin_email(app)
+        if email == primary_admin:
+            return jsonify({"error": "Super admin rol kan niet aangepast worden."}), 400
+        target = get_auth_user(email)
+        if not target:
+            return jsonify({"error": "Account niet gevonden"}), 404
+        ok = set_auth_user_group_admin(email, enabled)
+        if not ok:
+            return jsonify({"error": "Kon rol niet wijzigen"}), 400
+        return jsonify({"ok": True})
+
+    @app.put("/api/accounts/<path:user_email>/detail")
+    def api_accounts_update_detail(user_email):
+        user = _require_auth()
+        settings = _runtime_settings(app)
+        if not _can_manage_group_users(user, settings):
+            return jsonify({"error": "Niet toegestaan"}), 403
+
+        current_email = str(user_email or "").strip().lower()
+        if not current_email:
+            return jsonify({"error": "Ongeldige account"}), 400
+        target = get_auth_user(current_email)
+        if not target:
+            return jsonify({"error": "Account niet gevonden"}), 404
+
+        is_primary = _is_primary_admin(user, settings)
+        target_group_ids = {int(gid) for gid in get_user_group_ids(current_email)}
+        if not is_primary and int(user.get("group_id") or -1) not in target_group_ids:
+            return jsonify({"error": "Niet toegestaan voor andere groep."}), 403
+
+        payload = request.get_json(force=True, silent=True) or {}
+        next_name = str(payload.get("name") or "").strip() or target.get("name") or current_email
+        next_email = str(payload.get("email") or "").strip().lower() or current_email
+        next_role = str(payload.get("role") or "user").strip().lower()
+        if next_role not in {"user", "group_admin", "admin"}:
+            return jsonify({"error": "Ongeldige rol"}), 400
+
+        primary_admin_email = _super_admin_email(app)
+        if not is_primary and next_role == "admin":
+            return jsonify({"error": "Alleen admin kan admin-rol toekennen."}), 403
+        if primary_admin_email == current_email and next_email != current_email:
+            return jsonify({"error": "Super admin e-mail kan niet aangepast worden."}), 400
+        if primary_admin_email == current_email and next_role != "admin":
+            return jsonify({"error": "Super admin rol kan niet aangepast worden."}), 400
+
+        requested_group_id = int(payload.get("group_id") or target.get("group_id") or 1)
+        if not is_primary:
+            requested_group_id = int(user.get("group_id") or 1)
+        if requested_group_id <= 0 or not group_exists(requested_group_id):
+            return jsonify({"error": "Ongeldige groep"}), 400
+
+        ok, reason = update_auth_user_identity(current_email, next_email, next_name)
+        if not ok:
+            if reason == "exists":
+                return jsonify({"error": "Dit e-mailadres bestaat al."}), 400
+            return jsonify({"error": "Naam/e-mail opslaan mislukt."}), 400
+
+        target_email = next_email
+        set_auth_user_group(target_email, requested_group_id)
+
+        if next_role == "admin":
+            set_auth_user_admin(target_email, True)
+            set_auth_user_group_admin(target_email, False)
+        elif next_role == "group_admin":
+            set_auth_user_admin(target_email, False)
+            set_auth_user_group_admin(target_email, True)
+        else:
+            set_auth_user_admin(target_email, False)
+            set_auth_user_group_admin(target_email, False)
+
+        next_password = str(payload.get("password") or "")
+        if next_password:
+            if len(next_password) < 8:
+                return jsonify({"error": "Wachtwoord moet minstens 8 tekens hebben."}), 400
+            ok_pwd = update_auth_password(target_email, next_password)
+            if not ok_pwd:
+                return jsonify({"error": "Wachtwoord opslaan mislukt."}), 400
+
+        updated = get_auth_user(target_email)
+        if not updated:
+            return jsonify({"error": "Account niet gevonden na opslaan."}), 404
+        return jsonify({"ok": True, "item": updated})
+
+    @app.get("/api/groups")
+    def api_groups_get():
+        user = _require_auth()
+        settings = _runtime_settings(app)
+        if not _can_manage_group_users(user, settings):
+            return jsonify({"error": "Niet toegestaan"}), 403
+        groups = list_groups()
+        if _is_primary_admin(user, settings):
+            members = list_auth_users()
+        else:
+            groups = [g for g in groups if int(g.get("id") or 0) == int(user["group_id"] or -1)]
+            members = list_auth_users(user["group_id"])
+        by_group = {}
+        for member in members:
+            gids = get_user_group_ids(member.get("email", ""))
+            for gid in gids:
+                by_group.setdefault(int(gid), []).append(member)
+        for group in groups:
+            group["members"] = by_group.get(int(group["id"]), [])
+        return jsonify({"items": groups})
+
+    @app.post("/api/groups")
+    def api_groups_post():
+        user = _require_auth()
+        if not _is_admin(user):
+            return jsonify({"error": "Niet toegestaan"}), 403
+        payload = request.get_json(force=True, silent=True) or {}
+        group_name = str(payload.get("name") or "").strip()
+        if not group_name:
+            return jsonify({"error": "Groepsnaam is verplicht."}), 400
+        group_id = create_group(group_name)
+        if not group_id:
+            return jsonify({"error": "Groep kon niet aangemaakt worden."}), 400
+        return jsonify({"ok": True, "group_id": group_id})
+
+    @app.put("/api/groups/<int:group_id>")
+    def api_groups_put(group_id):
+        user = _require_auth()
+        if not _is_admin(user):
+            return jsonify({"error": "Niet toegestaan"}), 403
+        payload = request.get_json(force=True, silent=True) or {}
+        group_name = str(payload.get("name") or "").strip()
+        if not group_name:
+            return jsonify({"error": "Groepsnaam is verplicht."}), 400
+        ok = rename_group(group_id, group_name)
+        if not ok:
+            return jsonify({"error": "Groep niet gevonden."}), 404
+        return jsonify({"ok": True})
+
+    @app.delete("/api/groups/<int:group_id>")
+    def api_groups_delete(group_id):
+        user = _require_auth()
+        if not _can_delete_groups(user):
+            return jsonify({"error": "Niet toegestaan"}), 403
+        ok, reason = delete_group(group_id)
+        if not ok:
+            if reason == "protected":
+                return jsonify({"error": "Standaardgroep kan niet verwijderd worden."}), 400
+            return jsonify({"error": "Groep niet gevonden."}), 404
+        refreshed = get_auth_user(user.get("email", ""))
+        if refreshed:
+            user["group_id"] = int(refreshed.get("group_id") or 1)
+            user["group_ids"] = get_user_group_ids(user.get("email", ""))
+            session["user"] = user
+        return jsonify({"ok": True})
 
     @app.get("/api/calendar")
     def api_calendar():
@@ -903,7 +1411,7 @@ def register_routes(app):
             start = today.replace(day=1).isoformat()
             end = (today + timedelta(days=45)).isoformat()
 
-        rows = get_days_between(start, end)
+        rows = get_days_between(user["group_id"], start, end)
         shopping_history_counts = get_shopping_history_counts_between(user["email"], start, end)
         by_day = {row["day_date"]: row for row in rows}
         recipe_map = _recipe_map_for_user(user["email"])
@@ -927,10 +1435,10 @@ def register_routes(app):
 
     @app.put("/api/calendar/<day>")
     def api_calendar_day(day):
-        _require_auth()
+        user = _require_auth()
         payload = request.get_json(force=True, silent=True) or {}
         cook = payload.get("cook", True)
-        set_day_cook(day, _parse_bool(cook))
+        set_day_cook(user["group_id"], day, _parse_bool(cook))
         return jsonify({"ok": True})
 
     @app.post("/api/calendar/<day>/retry")
@@ -940,17 +1448,17 @@ def register_routes(app):
         options = payload.get("options", {})
         person_count = _parse_int(payload.get("person_count"), default=2, min_value=1, max_value=8)
 
-        current = get_day(day) or {}
+        current = get_day(user["group_id"], day) or {}
         current_meal_id = current.get("meal_id")
         user_settings = _settings_for_user(user["email"], _runtime_settings(app))
         effective_allergies = _effective_allergies(user["email"], user_settings)
         recipe_map = _recipe_map_for_user(user["email"])
-        prev_day = get_day(_shift_iso(day, -1)) or {}
-        next_day = get_day(_shift_iso(day, 1)) or {}
+        prev_day = get_day(user["group_id"], _shift_iso(day, -1)) or {}
+        next_day = get_day(user["group_id"], _shift_iso(day, 1)) or {}
         prev_recipe = recipe_map.get(prev_day.get("meal_id")) if prev_day.get("meal_id") else None
         next_recipe = recipe_map.get(next_day.get("meal_id")) if next_day.get("meal_id") else None
         week_start, week_end = _week_bounds(day)
-        week_rows = get_days_between(week_start, week_end)
+        week_rows = get_days_between(user["group_id"], week_start, week_end)
         recent_ids = [row.get("meal_id") for row in week_rows if row.get("meal_id") and row.get("day_date") != day]
 
         recipe = select_best_recipe(
@@ -968,7 +1476,7 @@ def register_routes(app):
         if not recipe:
             return jsonify({"error": "Geen alternatief gerecht beschikbaar"}), 400
 
-        set_day_meal(day, recipe["id"])
+        set_day_meal(user["group_id"], day, recipe["id"])
         clear_shopping_items(user["email"])
         return jsonify(
             {
@@ -1124,14 +1632,14 @@ def register_routes(app):
         if not start or not end:
             return jsonify({"error": "start and end are required"}), 400
         force = _parse_bool(payload.get("force", False))
-        if not force and _has_generated_plan_between(start, end):
+        if not force and _has_generated_plan_between(user["group_id"], start, end):
             return jsonify({"error": "Er bestaat al een weekmenu voor deze periode. Opnieuw genereren?", "requires_confirmation": True}), 409
 
         person_count = _parse_int(options.get("person_count"), default=2, min_value=1, max_value=8)
         user_settings = _settings_for_user(user["email"], _runtime_settings(app))
         effective_allergies = _effective_allergies(user["email"], user_settings)
 
-        days = get_days_between(start, end)
+        days = get_days_between(user["group_id"], start, end)
         cook_days = [d["day_date"] for d in days if d["cook"]]
 
         known = set(d["day_date"] for d in days)
@@ -1143,7 +1651,7 @@ def register_routes(app):
 
         # Prevent stale meals from previous generations in the same range
         # from leaking into refreshed shopping lists.
-        clear_day_meals_between(start, end)
+        clear_day_meals_between(user["group_id"], start, end)
 
         plan = generate_plan(
             cook_days,
@@ -1157,7 +1665,7 @@ def register_routes(app):
         recipe_map = _recipe_map_for_user(user["email"])
         enriched = []
         for item in plan:
-            set_day_meal(item["date"], item["meal_id"])
+            set_day_meal(user["group_id"], item["date"], item["meal_id"])
             recipe = recipe_map.get(item["meal_id"], {})
             enriched.append(
                 {
@@ -1226,7 +1734,7 @@ def register_routes(app):
                 return jsonify({"error": "dates or start/end are required"}), 400
             dates = list(_date_range(start, end))
 
-        output = _build_shopping_items(user["email"], dates, person_count, base_servings)
+        output = _build_shopping_items(user["email"], user["group_id"], dates, person_count, base_servings)
         replace_shopping_items(user["email"], output)
         return jsonify({"items": _decorate_shopping_items(list_shopping_items(user["email"])), "person_count": person_count})
 
@@ -1296,7 +1804,7 @@ def register_routes(app):
                 "dislikes": settings["family"].get("dislikes", []),
             },
             "auth": {
-                "admin_email": settings["auth"].get("admin_email"),
+                "admin_email": _super_admin_email(app),
                 "allowed_emails": settings["auth"].get("allowed_emails", []),
             },
             "app": {
@@ -1308,7 +1816,16 @@ def register_routes(app):
                 "dislikes": user_dislikes,
                 "menu_mode": mode,
                 "custom_meals_count": count,
+                "is_primary_admin": _is_primary_admin(user, settings),
+                "is_group_admin": _is_group_admin(user),
+                "can_manage_groups": _is_admin(user),
+                "can_manage_group_users": _can_manage_group_users(user, settings),
+                "can_manage_group_menu_mode": _can_manage_group_menu_mode(user, settings),
+                "group": {"id": int(user.get("group_id") or 1), "name": _group_name(user.get("group_id"))},
+                "group_ids": [int(gid) for gid in (user.get("group_ids") or [user.get("group_id") or 1])],
+                "available_groups": list_groups() if _is_admin(user) else [],
             },
             "is_admin": user.get("is_admin", False),
+            "is_group_admin": _is_group_admin(user),
         }
         return jsonify(public)

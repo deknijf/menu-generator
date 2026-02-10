@@ -13,6 +13,15 @@ const state = {
   selectedCustomMealIds: [],
   profileMenuMode: "ai_only",
   customMealsCount: 0,
+  isPrimaryAdmin: false,
+  isGroupAdmin: false,
+  canManageGroupUsers: false,
+  canManageGroups: false,
+  canManageGroupMenuMode: false,
+  adminGroupIds: [],
+  availableGroups: [],
+  manageableGroups: [],
+  manageableAccounts: [],
 };
 const sidebarStorageKey = "sidebar_collapsed";
 const activeTabStorageKey = "active_tab";
@@ -36,6 +45,15 @@ const rotationLimitLabels = {
   "1_per_week": "max 1x/week",
   "1_per_month": "max 1x/maand",
 };
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
 function iso(d) {
   return d.toISOString().slice(0, 10);
@@ -446,8 +464,12 @@ async function fetchSession() {
 
   state.user = data.user;
   document.getElementById("user-info").textContent = `${state.user.name}`;
-  document.getElementById("profile-user").textContent = `${state.user.name} (${state.user.email})`;
-  document.getElementById("profile-role").textContent = state.user.is_admin ? "Admin" : "Gebruiker";
+  const profileNameEl = document.getElementById("profile-name");
+  const profileEmailEl = document.getElementById("profile-email");
+  if (profileNameEl) profileNameEl.value = state.user.name || "";
+  if (profileEmailEl) profileEmailEl.value = state.user.email || "";
+  const roleLabel = state.user.is_admin ? "Admin" : state.user.is_group_admin ? "Groep-admin" : "Gebruiker";
+  document.getElementById("profile-role").textContent = roleLabel;
 }
 
 async function fetchProfileSettings() {
@@ -456,11 +478,15 @@ async function fetchProfileSettings() {
   const data = await res.json();
   state.settings = data;
 
-  document.getElementById("profile-admin").textContent = data.auth?.admin_email || "-";
-  const allowed = data.auth?.allowed_emails || [];
-  document.getElementById("profile-allowed").textContent = allowed.length ? allowed.join(", ") : "-";
-  const adminPanel = document.getElementById("profile-admin-settings");
-  if (adminPanel) adminPanel.hidden = !Boolean(data.is_admin);
+  const profileGroupEl = document.getElementById("profile-group");
+  if (profileGroupEl) {
+    const isPrimary = Boolean(data.profile?.is_primary_admin);
+    const selectedIds = new Set((data.profile?.group_ids || []).map((value) => Number(value)));
+    const selectedNames = (data.profile?.available_groups || [])
+      .filter((group) => selectedIds.has(Number(group.id || 0)))
+      .map((group) => group.name);
+    profileGroupEl.textContent = isPrimary && selectedNames.length ? selectedNames.join(", ") : data.profile?.group?.name || "-";
+  }
 
   const baseServings = data.app?.base_servings || 2;
   if (!document.getElementById("person-count").value) {
@@ -475,13 +501,434 @@ async function fetchProfileSettings() {
   renderProfileChips("dislikes");
   state.profileMenuMode = data.profile?.menu_mode || "ai_only";
   state.customMealsCount = Number(data.profile?.custom_meals_count || 0);
-
-  document.getElementById("profile-admin-email").value = data.auth?.admin_email || "";
-  document.getElementById("profile-admin-name").value = data.auth?.admin_email || "";
-  document.getElementById("profile-admin-password").value = "";
-  document.getElementById("profile-allowed-emails").value = (data.auth?.allowed_emails || []).join("\n");
+  state.isPrimaryAdmin = Boolean(data.profile?.is_primary_admin);
+  state.isGroupAdmin = Boolean(data.profile?.is_group_admin);
+  state.canManageGroupUsers = Boolean(data.profile?.can_manage_group_users);
+  state.canManageGroupMenuMode = Boolean(data.profile?.can_manage_group_menu_mode);
+  state.canManageGroups = Boolean(data.profile?.can_manage_groups) || Boolean(state.user?.is_admin);
+  state.adminGroupIds = (data.profile?.group_ids || []).map((value) => Number(value));
+  state.availableGroups = data.profile?.available_groups || [];
+  renderAdminGroupMemberships();
+  const accountPanel = document.getElementById("profile-account-management");
+  if (accountPanel) accountPanel.hidden = !state.canManageGroupUsers;
+  const accountGroupSelectWrap = document.getElementById("profile-new-account-group-select-wrap");
+  const accountGroupFixedWrap = document.getElementById("profile-new-account-group-fixed-wrap");
+  const accountGroupFixed = document.getElementById("profile-new-account-group-fixed");
+  if (accountGroupSelectWrap) accountGroupSelectWrap.hidden = !state.canManageGroups;
+  if (accountGroupFixedWrap) accountGroupFixedWrap.hidden = state.canManageGroups;
+  if (accountGroupFixed) accountGroupFixed.textContent = data.profile?.group?.name || state.user?.group_name || "-";
+  const groupToolbar = document.getElementById("profile-group-toolbar");
+  if (groupToolbar) {
+    groupToolbar.hidden = !state.canManageGroups;
+    groupToolbar.style.display = state.canManageGroups ? "grid" : "none";
+  }
+  const modeSelect = document.getElementById("profile-menu-mode");
+  if (modeSelect) modeSelect.disabled = !state.canManageGroupMenuMode;
+  if (state.canManageGroupUsers) {
+    await loadManageableAccounts();
+  }
+  const profileNameEl = document.getElementById("profile-name");
+  const profileEmailEl = document.getElementById("profile-email");
+  if (profileNameEl) profileNameEl.value = state.user?.name || "";
+  if (profileEmailEl) profileEmailEl.value = state.user?.email || "";
 
   updateProfileMenuModeOptions();
+}
+
+async function updateOwnPassword(status) {
+  const currentEl = document.getElementById("profile-current-password");
+  const newEl = document.getElementById("profile-new-password");
+  const current_password = currentEl.value || "";
+  const new_password = newEl.value || "";
+  if (!current_password && !new_password) {
+    return true;
+  }
+  if (!current_password || !new_password) {
+    status.textContent = "Vul huidig en nieuw wachtwoord in.";
+    return false;
+  }
+  const res = await fetch("/api/profile/password", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ current_password, new_password }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    status.textContent = data.error || "Wachtwoord wijzigen mislukt.";
+    return false;
+  }
+  currentEl.value = "";
+  newEl.value = "";
+  return true;
+}
+
+async function saveProfileAccount(status) {
+  const nameEl = document.getElementById("profile-name");
+  const emailEl = document.getElementById("profile-email");
+  const name = (nameEl?.value || "").trim();
+  const email = (emailEl?.value || "").trim().toLowerCase();
+  if (!email) {
+    status.textContent = "E-mail is verplicht.";
+    return false;
+  }
+  const res = await fetch("/api/profile/account", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, email }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    status.textContent = data.error || "Naam/e-mail opslaan mislukt.";
+    return false;
+  }
+  if (data.user) {
+    state.user = data.user;
+    document.getElementById("user-info").textContent = `${state.user.name}`;
+    document.getElementById("profile-role").textContent = state.user.is_admin
+      ? "Admin"
+      : state.user.is_group_admin
+        ? "Groep-admin"
+        : "Gebruiker";
+    if (nameEl) nameEl.value = state.user.name || "";
+    if (emailEl) emailEl.value = state.user.email || "";
+  }
+  return true;
+}
+
+async function saveAdminGroupMemberships(status) {
+  if (!state.isPrimaryAdmin) return true;
+  const checks = Array.from(document.querySelectorAll(".profile-admin-group-check"));
+  const group_ids = checks.filter((input) => input.checked).map((input) => Number(input.value));
+  if (!group_ids.length) {
+    status.textContent = "Selecteer minstens 1 groep voor admin.";
+    return false;
+  }
+  const res = await fetch("/api/profile/groups", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ group_ids }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    status.textContent = data.error || "Groepen opslaan mislukt.";
+    return false;
+  }
+  state.adminGroupIds = (data.group_ids || []).map((value) => Number(value));
+  const groupsLabel = (data.groups || []).map((item) => item.name).join(", ");
+  const profileGroupEl = document.getElementById("profile-group");
+  if (profileGroupEl && groupsLabel) profileGroupEl.textContent = groupsLabel;
+  return true;
+}
+
+async function loadManageableAccounts() {
+  if (!state.canManageGroupUsers) return;
+  const list = document.getElementById("profile-accounts-list");
+  if (!list) return;
+  list.innerHTML = "";
+  const [groupsRes, accountsRes] = await Promise.all([fetch("/api/groups"), fetch("/api/accounts")]);
+  if (!groupsRes.ok || !accountsRes.ok) {
+    list.innerHTML = "<li>Accounts laden mislukt.</li>";
+    return;
+  }
+
+  const groupsData = await groupsRes.json().catch(() => ({}));
+  const accountsData = await accountsRes.json().catch(() => ({}));
+  state.manageableGroups = groupsData.items || [];
+  state.manageableAccounts = accountsData.items || [];
+  populateGroupSelects();
+
+  const items = state.manageableAccounts;
+  if (!items.length) {
+    list.innerHTML = "<li>Geen accounts gevonden.</li>";
+    return;
+  }
+
+  const byGroup = new Map();
+  items.forEach((item) => {
+    const gid = Number(item.group_id || 1);
+    if (!byGroup.has(gid)) byGroup.set(gid, []);
+    byGroup.get(gid).push(item);
+  });
+
+  state.manageableGroups.forEach((group) => {
+    const gid = Number(group.id || 1);
+    const members = byGroup.get(gid) || [];
+    const canDeleteGroup = Boolean(state.user?.is_admin) && gid > 1;
+    const li = document.createElement("li");
+    li.className = "profile-group-row";
+    const membersHtml = members.length
+      ? members
+          .map(
+            (item) => {
+              const isPrimaryAdmin = Boolean(item.is_super_admin) || String(item.email || "").toLowerCase() === String(state.settings?.auth?.admin_email || "").toLowerCase();
+              const safeEmail = escapeHtml(item.email);
+              const safeName = escapeHtml(item.name);
+              const showEmailLine = String(item.name || "").trim().toLowerCase() !== String(item.email || "").trim().toLowerCase();
+              const roleLabel = item.is_admin ? "admin" : item.is_group_admin ? "groep-admin" : "user";
+              const roleClass = isPrimaryAdmin ? "profile-account-role profile-account-role-super" : "profile-account-role";
+              const safeHref = `/account/${encodeURIComponent(item.email || "")}`;
+              return `
+      <a class="profile-account-row profile-account-row-link" href="${safeHref}">
+        <span class="profile-account-main">
+          <strong class="profile-account-name">${safeName}</strong>
+          ${showEmailLine ? `<span class="profile-account-email">${safeEmail}</span>` : ""}
+        </span>
+        <span class="profile-account-tools">
+          <span class="${roleClass}">${isPrimaryAdmin ? "super admin" : roleLabel}</span>
+        </span>
+      </a>
+    `
+            }
+          )
+          .join("")
+      : `<div class="muted">Geen gebruikers in deze groep.</div>`;
+    li.innerHTML = `
+      <div class="profile-group-head">
+        <strong class="profile-group-name">${escapeHtml(group.name)}</strong>
+        <span class="profile-group-head-right">
+          <span class="profile-group-count">${members.length} ${members.length === 1 ? "gebruiker" : "gebruikers"}</span>
+          ${canDeleteGroup ? `
+          <button class="profile-group-delete-btn" type="button" data-group-id="${gid}" data-group-name="${escapeHtml(group.name)}" aria-label="Verwijder groep" title="Verwijder groep">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M9 3h6l1 2h4v2H4V5h4l1-2zM7 9h2v9H7V9zm4 0h2v9h-2V9zm4 0h2v9h-2V9z"></path>
+            </svg>
+          </button>` : ""}
+        </span>
+      </div>
+      <div class="profile-group-members">${membersHtml}</div>
+    `;
+    list.appendChild(li);
+  });
+
+  list.querySelectorAll(".profile-group-delete-btn").forEach((btn) => {
+    btn.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const groupId = Number(btn.dataset.groupId || 0);
+      const groupName = String(btn.dataset.groupName || "deze groep");
+      if (!groupId) return;
+      const confirmed = window.confirm(`Ben je zeker dat je deze groep "${groupName}" wil verwijderen?`);
+      if (!confirmed) return;
+      await deleteManagedGroup(groupId);
+    });
+  });
+}
+
+function renderGroupOptionsHtml(selectedGroupId) {
+  return (state.manageableGroups || [])
+    .map((group) => {
+      const gid = Number(group.id || 1);
+      return `<option value="${gid}" ${gid === Number(selectedGroupId || 1) ? "selected" : ""}>${escapeHtml(group.name)}</option>`;
+    })
+    .join("");
+}
+
+function renderAdminGroupMemberships() {
+  const wrap = document.getElementById("profile-admin-groups-wrap");
+  const list = document.getElementById("profile-admin-groups-list");
+  if (!wrap || !list) return;
+  if (!state.isPrimaryAdmin) {
+    wrap.hidden = true;
+    list.innerHTML = "";
+    return;
+  }
+  wrap.hidden = false;
+  const groups = state.availableGroups || [];
+  const selected = new Set((state.adminGroupIds || []).map((value) => Number(value)));
+  if (!groups.length) {
+    list.innerHTML = "<p class='muted'>Geen groepen gevonden.</p>";
+    return;
+  }
+  list.innerHTML = groups
+    .map((group) => {
+      const gid = Number(group.id || 0);
+      return `
+      <label class="checkline">
+        <input type="checkbox" class="profile-admin-group-check" value="${gid}" ${selected.has(gid) ? "checked" : ""} />
+        <span>${escapeHtml(group.name || `Groep ${gid}`)}</span>
+      </label>
+    `;
+    })
+    .join("");
+}
+
+function populateGroupSelects() {
+  const accountGroupSelect = document.getElementById("profile-new-account-group");
+  const renameGroupSelect = document.getElementById("profile-rename-group-select");
+  const defaultGroup = state.canManageGroups ? state.user?.group_id || 1 : state.user?.group_id || 1;
+  const options = renderGroupOptionsHtml(defaultGroup);
+  if (accountGroupSelect) accountGroupSelect.innerHTML = options;
+  if (renameGroupSelect) renameGroupSelect.innerHTML = options;
+  if (accountGroupSelect) accountGroupSelect.disabled = !state.canManageGroups;
+  if (renameGroupSelect) renameGroupSelect.disabled = !state.canManageGroups;
+}
+
+async function createManagedAccount() {
+  if (!state.canManageGroupUsers) return;
+  const emailEl = document.getElementById("profile-new-account-email");
+  const nameEl = document.getElementById("profile-new-account-name");
+  const passwordEl = document.getElementById("profile-new-account-password");
+  const groupEl = document.getElementById("profile-new-account-group");
+  const status = document.getElementById("profile-account-status");
+  const email = (emailEl.value || "").trim().toLowerCase();
+  const name = (nameEl.value || "").trim();
+  const password = passwordEl.value || "";
+  const group_id = state.canManageGroups ? Number(groupEl?.value || 1) : Number(state.user?.group_id || 1);
+  if (!email || !password) {
+    status.textContent = "E-mail en wachtwoord zijn verplicht.";
+    return;
+  }
+  const res = await fetch("/api/accounts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, name, password, group_id }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    status.textContent = data.error || "Account aanmaken mislukt.";
+    return;
+  }
+  emailEl.value = "";
+  nameEl.value = "";
+  passwordEl.value = "";
+  status.textContent = "Account aangemaakt.";
+  await loadManageableAccounts();
+  setTimeout(() => {
+    status.textContent = "";
+  }, 2000);
+}
+
+async function createManagedGroup() {
+  if (!state.canManageGroups) return;
+  const nameEl = document.getElementById("profile-new-group-name");
+  const status = document.getElementById("profile-account-status");
+  const name = (nameEl?.value || "").trim();
+  if (!name) {
+    status.textContent = "Geef een groepsnaam op.";
+    return;
+  }
+  const res = await fetch("/api/groups", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    status.textContent = data.error || "Groep aanmaken mislukt.";
+    return;
+  }
+  if (nameEl) nameEl.value = "";
+  status.textContent = "Groep aangemaakt.";
+  await loadManageableAccounts();
+  setTimeout(() => {
+    status.textContent = "";
+  }, 2000);
+}
+
+async function renameManagedGroup() {
+  if (!state.canManageGroups) return;
+  const selectEl = document.getElementById("profile-rename-group-select");
+  const nameEl = document.getElementById("profile-rename-group-name");
+  const status = document.getElementById("profile-account-status");
+  const group_id = Number(selectEl?.value || 0);
+  const name = (nameEl?.value || "").trim();
+  if (!group_id || !name) {
+    status.textContent = "Kies een groep en geef een nieuwe naam op.";
+    return;
+  }
+  const res = await fetch(`/api/groups/${encodeURIComponent(String(group_id))}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    status.textContent = data.error || "Groep hernoemen mislukt.";
+    return;
+  }
+  if (nameEl) nameEl.value = "";
+  status.textContent = "Groep hernoemd.";
+  await loadManageableAccounts();
+  setTimeout(() => {
+    status.textContent = "";
+  }, 2000);
+}
+
+async function deleteManagedGroup(group_id) {
+  if (!state.user?.is_admin || !group_id) return;
+  const status = document.getElementById("profile-account-status");
+  const res = await fetch(`/api/groups/${encodeURIComponent(String(group_id))}`, {
+    method: "DELETE",
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (status) status.textContent = data.error || "Groep verwijderen mislukt.";
+    return;
+  }
+  if (status) status.textContent = "Groep verwijderd.";
+  await fetchProfileSettings();
+  await loadManageableAccounts();
+  setTimeout(() => {
+    if (status) status.textContent = "";
+  }, 2000);
+}
+
+async function moveManagedAccountToGroup(email, group_id) {
+  if (!state.canManageGroups || !email || !group_id) return;
+  const status = document.getElementById("profile-account-status");
+  const res = await fetch(`/api/accounts/${encodeURIComponent(email)}/group`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ group_id }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    status.textContent = data.error || "Groep wijzigen mislukt.";
+    return;
+  }
+  status.textContent = `Groep van ${email} aangepast.`;
+  await loadManageableAccounts();
+  setTimeout(() => {
+    status.textContent = "";
+  }, 2000);
+}
+
+async function deleteManagedAccount(email) {
+  if (!state.canManageGroupUsers || !email) return;
+  const status = document.getElementById("profile-account-status");
+  const ok = window.confirm(`Account ${email} verwijderen?`);
+  if (!ok) return;
+  const res = await fetch(`/api/accounts/${encodeURIComponent(email)}`, { method: "DELETE" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    status.textContent = data.error || "Account verwijderen mislukt.";
+    return;
+  }
+  status.textContent = `Account ${email} verwijderd.`;
+  await loadManageableAccounts();
+  setTimeout(() => {
+    status.textContent = "";
+  }, 2000);
+}
+
+async function setManagedGroupAdmin(email, is_group_admin) {
+  if (!state.canManageGroups || !email) return;
+  const status = document.getElementById("profile-account-status");
+  const res = await fetch(`/api/accounts/${encodeURIComponent(email)}/group-admin`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ is_group_admin: Boolean(is_group_admin) }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    status.textContent = data.error || "Rol wijzigen mislukt.";
+    return;
+  }
+  status.textContent = `Rol van ${email} aangepast.`;
+  await loadManageableAccounts();
+  setTimeout(() => {
+    status.textContent = "";
+  }, 2000);
 }
 
 function updateProfileMenuModeOptions() {
@@ -514,28 +961,23 @@ function updateProfilePreferencesHint() {
     prefs.hidden = !aiAllowed;
     prefs.style.display = aiAllowed ? "grid" : "none";
   }
-  note.textContent = aiAllowed
+  const baseNote = aiAllowed
     ? "Allergieën, favorieten en afkeur zijn optioneel zolang AI-maaltijden toegelaten zijn."
     : "Je gebruikt nu alleen eigen maaltijden. Deze voorkeuren zijn niet verplicht en worden enkel gebruikt zodra AI weer aan staat.";
+  if (!state.canManageGroupMenuMode) {
+    note.textContent = `${baseNote} Alleen admin of groep-admin kan deze instelling aanpassen.`;
+  } else {
+    note.textContent = baseNote;
+  }
 }
 
-async function saveProfileAllergies() {
+async function saveProfilePreferences(status) {
   const allergies = (state.profileAllergies || []).map((item) => item.toLowerCase());
   const likes = (state.profileLikes || []).map((item) => item.toLowerCase());
   const dislikes = (state.profileDislikes || []).map((item) => item.toLowerCase());
   const menu_mode = document.getElementById("profile-menu-mode").value;
 
   const payload = { allergies, likes, dislikes, menu_mode };
-  if (state.user?.is_admin) {
-    payload.global = {
-      auth: {
-        admin_email: (document.getElementById("profile-admin-email").value || "").trim().toLowerCase(),
-        admin_name: (document.getElementById("profile-admin-name").value || "").trim(),
-        admin_password: document.getElementById("profile-admin-password").value || "",
-        allowed_emails: splitLinesText(document.getElementById("profile-allowed-emails").value),
-      },
-    };
-  }
 
   const res = await fetch("/api/profile", {
     method: "PUT",
@@ -543,7 +985,6 @@ async function saveProfileAllergies() {
     body: JSON.stringify(payload),
   });
 
-  const status = document.getElementById("profile-save-status");
   if (!res.ok) {
     try {
       const err = await res.json();
@@ -551,7 +992,7 @@ async function saveProfileAllergies() {
     } catch {
       status.textContent = "Opslaan mislukt.";
     }
-    return;
+    return false;
   }
 
   const data = await res.json();
@@ -563,16 +1004,37 @@ async function saveProfileAllergies() {
   renderProfileChips("dislikes");
   state.profileMenuMode = data.menu_mode || state.profileMenuMode;
   state.customMealsCount = Number(data.custom_meals_count || state.customMealsCount || 0);
-  if (data.global?.auth) {
-    document.getElementById("profile-admin").textContent = data.global.auth.admin_email || "-";
-    document.getElementById("profile-allowed").textContent = (data.global.auth.allowed_emails || []).join(", ") || "-";
-    document.getElementById("profile-admin-password").value = "";
+  const profileGroupEl = document.getElementById("profile-group");
+  if (profileGroupEl) {
+    if (state.isPrimaryAdmin) {
+      const selected = new Set((state.adminGroupIds || []).map((value) => Number(value)));
+      const names = (state.availableGroups || [])
+        .filter((group) => selected.has(Number(group.id || 0)))
+        .map((group) => group.name);
+      profileGroupEl.textContent = names.length ? names.join(", ") : profileGroupEl.textContent;
+    } else {
+      profileGroupEl.textContent = data.group?.name || profileGroupEl.textContent;
+    }
   }
   updateProfileMenuModeOptions();
+  return true;
+}
+
+async function saveProfileAll() {
+  const status = document.getElementById("profile-save-status");
+  status.textContent = "";
+  const okAccount = await saveProfileAccount(status);
+  if (!okAccount) return;
+  const okGroups = await saveAdminGroupMemberships(status);
+  if (!okGroups) return;
+  const okPassword = await updateOwnPassword(status);
+  if (!okPassword) return;
+  const okPrefs = await saveProfilePreferences(status);
+  if (!okPrefs) return;
   status.textContent = "Opgeslagen.";
   setTimeout(() => {
     status.textContent = "";
-  }, 1800);
+  }, 2000);
 }
 
 async function loadCustomMeals() {
@@ -1466,7 +1928,10 @@ async function boot() {
   document.getElementById("shopping-complete-btn").addEventListener("click", completeShoppingList);
   document.getElementById("hero-generate-btn").addEventListener("click", generateMeals);
   document.getElementById("hero-shopping-btn").addEventListener("click", generateShoppingList);
-  document.getElementById("save-profile-btn").addEventListener("click", saveProfileAllergies);
+  document.getElementById("save-profile-btn").addEventListener("click", saveProfileAll);
+  document.getElementById("profile-create-account-btn").addEventListener("click", createManagedAccount);
+  document.getElementById("profile-create-group-btn").addEventListener("click", createManagedGroup);
+  document.getElementById("profile-rename-group-btn").addEventListener("click", renameManagedGroup);
   document.getElementById("profile-menu-mode").addEventListener("change", updateProfilePreferencesHint);
   document.getElementById("cm-save-btn").addEventListener("click", createCustomMeal);
   document.getElementById("cm-delete-btn").addEventListener("click", deleteSelectedCustomMeals);

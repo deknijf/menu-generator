@@ -1577,6 +1577,12 @@ input[type="password"] {
   gap: 0.8rem;
 }
 
+.detail-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
 .shopping-history-detail-card .shopping-history-hero-text {
   flex: 1 1 auto;
   min-width: 0;
@@ -1735,6 +1741,10 @@ a.history-day-meal:hover {
   gap: 0.7rem;
 }
 
+.profile-span-all {
+  grid-column: 1 / -1;
+}
+
 .chip-field {
   border: 1px solid #c8d8e5;
   border-radius: 12px;
@@ -1744,6 +1754,14 @@ a.history-day-meal:hover {
 
 .chip-field h4 {
   margin-bottom: 0.2rem;
+}
+
+.profile-admin-groups {
+  margin-top: 0.7rem;
+}
+
+.profile-admin-groups .toggle-list {
+  margin-top: 0.45rem;
 }
 
 .chips-input {
@@ -1770,6 +1788,201 @@ a.history-day-meal:hover {
   flex: 1 1 120px;
   padding: 0.22rem 0.2rem;
   font-size: 0.88rem;
+}
+
+#profile-accounts-list {
+  margin-top: 0.45rem;
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 0.7rem;
+}
+
+#profile-accounts-list li.profile-group-row {
+  border: 1px solid #c7d8e6;
+  border-radius: 12px;
+  background: linear-gradient(152deg, #eef8f5 0%, #ffffff 62%, #f2f8fc 100%);
+  padding: 0.65rem;
+  display: block;
+}
+
+.profile-group-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.5rem;
+}
+
+.profile-group-name {
+  color: #173147;
+  font-size: 0.95rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.profile-group-count {
+  color: #4e657a;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.profile-group-head-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.profile-group-delete-btn {
+  border: none;
+  background: transparent;
+  color: #7d97a7;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  flex: 0 0 auto;
+}
+
+.profile-group-delete-btn svg {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+}
+
+.profile-group-delete-btn:hover {
+  color: #be4e55;
+}
+
+.profile-group-members {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.profile-account-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid #d4e0ea;
+  border-radius: 10px;
+  background: #fff;
+  padding: 0.52rem 0.56rem;
+  box-shadow: 0 7px 18px rgba(20, 48, 76, 0.08);
+}
+
+.profile-account-main {
+  min-width: 0;
+  display: grid;
+  gap: 0.12rem;
+}
+
+.profile-account-link {
+  text-decoration: none;
+  color: inherit;
+}
+
+.profile-account-link:hover .profile-account-name {
+  text-decoration: underline;
+}
+
+.profile-account-row-link {
+  text-decoration: none;
+  color: inherit;
+  transition: box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.profile-account-row-link:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(20, 48, 76, 0.12);
+}
+
+.profile-account-name {
+  color: #1b3247;
+  font-size: 0.94rem;
+  line-height: 1.2;
+  font-weight: 800;
+}
+
+.profile-account-email {
+  color: #5f7386;
+  font-size: 0.8rem;
+  line-height: 1.2;
+  word-break: break-word;
+}
+
+.profile-account-role {
+  border: 1px solid #bedfce;
+  border-radius: 999px;
+  background: #eefaf6;
+  color: #0d7b5e;
+  font-size: 0.75rem;
+  font-weight: 800;
+  padding: 0.1rem 0.46rem;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.profile-account-role-super {
+  border-color: #d7c8ff;
+  background: #f4eeff;
+  color: #6c3fd1;
+}
+
+.profile-account-tools {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.profile-account-tools select {
+  width: 170px;
+  font-size: 0.82rem;
+  padding: 0.36rem 0.5rem;
+}
+
+.profile-account-tools .btn {
+  padding: 0.34rem 0.52rem;
+  font-size: 0.8rem;
+}
+
+.profile-account-fixed {
+  color: #4c667d;
+  font-size: 0.79rem;
+  font-weight: 700;
+}
+
+.profile-group-toolbar {
+  margin-top: 0.55rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.profile-group-actions {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.profile-inline-actions {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.4rem;
+}
+
+.profile-inline-actions-triple {
+  grid-template-columns: minmax(180px, 0.9fr) minmax(170px, 1fr) auto;
+}
+
+#profile-create-group-btn,
+#profile-rename-group-btn {
+  width: 128px;
 }
 
 .chip-tag {
@@ -2084,6 +2297,15 @@ a.history-day-meal:hover {
 
   .profile-preferences-grid,
   .profile-settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-group-members {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-inline-actions,
+  .profile-inline-actions-triple {
     grid-template-columns: 1fr;
   }
 
