@@ -26,6 +26,7 @@ Pas `config/settings.json` aan voor:
 - familie-allergieen/voorkeuren
 - nutritionele doelstellingen
 - `app.base_servings` (basisporties voor ingrediëntschaling)
+- `app.time_zone` (bv. `CEST`, gebruikt voor tijdstempel van aangekochte boodschappen in geschiedenis)
 
 ### Test-login standaard
 In `config/settings.json` staat standaard:

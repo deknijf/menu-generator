@@ -50,6 +50,15 @@
           </span>
           <span class="side-label">Mijn maaltijden</span>
         </button>
+        <button class="tab side-item" data-tab="history" type="button">
+          <span class="side-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="8"/>
+              <path d="M12 7v5l3 2"/>
+            </svg>
+          </span>
+          <span class="side-label">Geschiedenis</span>
+        </button>
         <button class="tab side-item" data-tab="profile" type="button">
           <span class="side-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="3.4"/><path d="M5 20a7 7 0 0 1 14 0"/></svg>
@@ -213,6 +222,9 @@
               <ul id="shopping-list-done" class="shopping-list"></ul>
             </section>
           </div>
+          <div id="shopping-complete-wrap" class="shopping-complete-wrap" hidden>
+            <button id="shopping-complete-btn" class="btn btn-primary" type="button">Gekocht</button>
+          </div>
         </section>
       </section>
 
@@ -317,6 +329,28 @@
         </section>
       </section>
 
+      <section id="tab-history" class="tab-panel">
+        <section class="card history-card">
+          <div class="history-head">
+            <div>
+              <h3>Geschiedenis</h3>
+              <p class="muted">Maandoverzicht van eerder geplande maaltijden.</p>
+            </div>
+            <div class="history-actions">
+              <button id="history-prev-btn" class="btn btn-ghost history-nav-btn history-icon-btn" type="button" aria-label="Vorige maand" title="Vorige maand">
+                <span aria-hidden="true">⏪</span>
+              </button>
+              <strong id="history-month-label">-</strong>
+              <button id="history-next-btn" class="btn btn-ghost history-nav-btn history-icon-btn" type="button" aria-label="Volgende maand" title="Volgende maand">
+                <span aria-hidden="true">⏩</span>
+              </button>
+              <button id="history-today-btn" class="btn btn-primary history-nav-btn" type="button">Deze maand</button>
+            </div>
+          </div>
+          <div id="history-calendar" class="history-calendar"></div>
+        </section>
+      </section>
+
       <section id="tab-profile" class="tab-panel">
         <section class="card">
           <h3>Profiel en voorkeuren</h3>
@@ -392,6 +426,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260210v20"></script>
+  <script src="/static/app.js?v=20260210v23"></script>
 </body>
 </html>

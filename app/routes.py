@@ -1,6 +1,7 @@
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from flask import (
     abort,
@@ -20,14 +21,18 @@ from .db import (
     add_shopping_item,
     clear_day_meals_between,
     clear_shopping_items,
+    complete_shopping_items,
     get_auth_user,
     get_runtime_settings,
     create_custom_meal,
     delete_shopping_item,
+    delete_shopping_history_entry,
     delete_custom_meals,
     get_custom_meal,
     get_day,
     get_days_between,
+    get_shopping_history_counts_between,
+    list_shopping_history_for_day,
     get_user_allergies,
     get_user_dislikes,
     get_user_likes,
@@ -99,6 +104,21 @@ def _pictures_dir():
 
 def _runtime_settings(app):
     return get_runtime_settings(app.config.get("SETTINGS", {}))
+
+
+def _timezone_from_settings(settings):
+    app_settings = (settings or {}).get("app", {}) if isinstance(settings, dict) else {}
+    token = str(app_settings.get("time_zone") or "UTC").strip()
+    aliases = {
+        "CEST": "Europe/Brussels",
+        "CET": "Europe/Brussels",
+        "UTC": "UTC",
+    }
+    zone_name = aliases.get(token.upper(), token)
+    try:
+        return ZoneInfo(zone_name)
+    except Exception:
+        return ZoneInfo("UTC")
 
 
 def _normalize_email_values(values):
@@ -196,6 +216,26 @@ def _date_range(start, end):
 
 def _shift_iso(day_iso, delta_days):
     return (datetime.strptime(day_iso, "%Y-%m-%d").date() + timedelta(days=delta_days)).isoformat()
+
+
+def _format_day_long_nl(day_iso):
+    d = datetime.strptime(day_iso, "%Y-%m-%d").date()
+    weekdays = ["maandag", "dinsdag", "woensdag", "donderdag", "vrijdag", "zaterdag", "zondag"]
+    months = [
+        "januari",
+        "februari",
+        "maart",
+        "april",
+        "mei",
+        "juni",
+        "juli",
+        "augustus",
+        "september",
+        "oktober",
+        "november",
+        "december",
+    ]
+    return f"{weekdays[d.weekday()]} {d.day} {months[d.month - 1]} {d.year}"
 
 
 def _normalize_token(value):
@@ -613,6 +653,31 @@ def register_routes(app):
             steps=_preparation_steps(recipe),
         )
 
+    @app.get("/shopping-history/<day_iso>")
+    def shopping_history_detail(day_iso):
+        user = _require_auth()
+        try:
+            datetime.strptime(day_iso, "%Y-%m-%d")
+        except ValueError:
+            abort(404)
+
+        entries = list_shopping_history_for_day(user["email"], day_iso)
+        return render_template(
+            "shopping_history_detail.html",
+            user=user,
+            day_iso=day_iso,
+            day_label=_format_day_long_nl(day_iso),
+            entries=entries,
+        )
+
+    @app.delete("/api/shopping-history/<int:entry_id>")
+    def api_delete_shopping_history_entry(entry_id):
+        user = _require_auth()
+        ok = delete_shopping_history_entry(user["email"], entry_id)
+        if not ok:
+            return jsonify({"error": "lijst niet gevonden"}), 404
+        return jsonify({"ok": True})
+
     @app.get("/")
     def index():
         if not session.get("user"):
@@ -839,6 +904,7 @@ def register_routes(app):
             end = (today + timedelta(days=45)).isoformat()
 
         rows = get_days_between(start, end)
+        shopping_history_counts = get_shopping_history_counts_between(user["email"], start, end)
         by_day = {row["day_date"]: row for row in rows}
         recipe_map = _recipe_map_for_user(user["email"])
 
@@ -852,6 +918,8 @@ def register_routes(app):
                     "meal_id": row["meal_id"] if row else None,
                     "meal_name": recipe_map.get(row["meal_id"], {}).get("name") if row and row["cook"] and row["meal_id"] else None,
                     "meal_image": recipe_map.get(row["meal_id"], {}).get("image_url") if row and row["cook"] and row["meal_id"] else None,
+                    "shopping_done": int(shopping_history_counts.get(day, 0)) > 0,
+                    "shopping_count": int(shopping_history_counts.get(day, 0)),
                 }
             )
 
@@ -1117,6 +1185,26 @@ def register_routes(app):
         user = _require_auth()
         clear_shopping_items(user["email"])
         return jsonify({"ok": True, "items": []})
+
+    @app.post("/api/shopping-list/complete")
+    def api_shopping_list_complete():
+        user = _require_auth()
+        settings = _runtime_settings(app)
+        now_local = datetime.now(_timezone_from_settings(settings))
+        ok, reason = complete_shopping_items(
+            user["email"],
+            now_local.date().isoformat(),
+            now_local.strftime("%H:%M"),
+        )
+        if not ok:
+            if reason == "empty":
+                return jsonify({"error": "Geen items om af te ronden."}), 400
+            if reason == "none_checked":
+                return jsonify({"error": "Vink eerst minstens één item af."}), 400
+            return jsonify({"error": "Kon boodschappen niet opslaan."}), 400
+        normalized = _normalize_stored_shopping_items(list_shopping_items(user["email"]))
+        replace_shopping_items(user["email"], normalized)
+        return jsonify({"ok": True, "items": _decorate_shopping_items(list_shopping_items(user["email"]))})
 
     @app.post("/api/shopping-list")
     def api_shopping_list():

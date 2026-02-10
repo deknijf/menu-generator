@@ -142,14 +142,37 @@ def init_db():
         )
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS shopping_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL,
+            purchased_on TEXT NOT NULL,
+            purchased_time_hhmm TEXT NOT NULL DEFAULT '',
+            items_json TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
     cur.execute("PRAGMA table_info(custom_meals)")
     columns = {row["name"] for row in cur.fetchall()}
+    def _safe_add_column(sql):
+        try:
+            cur.execute(sql)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
+
     if "rotation_limit" not in columns:
-        cur.execute("ALTER TABLE custom_meals ADD COLUMN rotation_limit TEXT NOT NULL DEFAULT '1_per_week'")
+        _safe_add_column("ALTER TABLE custom_meals ADD COLUMN rotation_limit TEXT NOT NULL DEFAULT '1_per_week'")
     if "preparation_json" not in columns:
-        cur.execute("ALTER TABLE custom_meals ADD COLUMN preparation_json TEXT NOT NULL DEFAULT '[]'")
+        _safe_add_column("ALTER TABLE custom_meals ADD COLUMN preparation_json TEXT NOT NULL DEFAULT '[]'")
     if "rating" not in columns:
-        cur.execute("ALTER TABLE custom_meals ADD COLUMN rating INTEGER NOT NULL DEFAULT 3")
+        _safe_add_column("ALTER TABLE custom_meals ADD COLUMN rating INTEGER NOT NULL DEFAULT 3")
+    cur.execute("PRAGMA table_info(shopping_history)")
+    shopping_history_columns = {row["name"] for row in cur.fetchall()}
+    if "purchased_time_hhmm" not in shopping_history_columns:
+        _safe_add_column("ALTER TABLE shopping_history ADD COLUMN purchased_time_hhmm TEXT NOT NULL DEFAULT ''")
     conn.commit()
     conn.close()
 
@@ -976,6 +999,162 @@ def clear_shopping_items(email):
     cur.execute("DELETE FROM shopping_items WHERE email = ?", (email,))
     conn.commit()
     conn.close()
+
+
+def complete_shopping_items(email, purchased_on, purchased_time_hhmm):
+    day_token = str(purchased_on or "").strip()
+    time_token = str(purchased_time_hhmm or "").strip()
+    if not day_token:
+        return (False, "invalid_date")
+    if not time_token:
+        time_token = "00:00"
+
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, name, quantity, unit, checked, sort_order
+        FROM shopping_items
+        WHERE email = ?
+        ORDER BY sort_order ASC, id ASC
+        """,
+        (email,),
+    )
+    rows = cur.fetchall()
+    if not rows:
+        conn.close()
+        return (False, "empty")
+
+    items = []
+    for row in rows:
+        items.append(
+            {
+                "name": row["name"],
+                "quantity": float(row["quantity"] or 0),
+                "unit": row["unit"] or "",
+                "checked": bool(row["checked"]),
+                "sort_order": int(row["sort_order"] or 0),
+            }
+        )
+    checked_items = [item for item in items if item.get("checked")]
+    if not checked_items:
+        conn.close()
+        return (False, "none_checked")
+
+    cur.execute(
+        """
+        INSERT INTO shopping_history (email, purchased_on, purchased_time_hhmm, items_json)
+        VALUES (?, ?, ?, ?)
+        """,
+        (email, day_token, time_token, json.dumps(checked_items)),
+    )
+    cur.execute(
+        """
+        DELETE FROM shopping_items
+        WHERE email = ? AND checked = 1
+        """,
+        (email,),
+    )
+    conn.commit()
+    conn.close()
+    return (True, "ok")
+
+
+def get_shopping_history_dates_between(email, start_date, end_date):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT purchased_on
+        FROM shopping_history
+        WHERE email = ? AND purchased_on BETWEEN ? AND ?
+        GROUP BY purchased_on
+        ORDER BY purchased_on ASC
+        """,
+        (email, start_date, end_date),
+    )
+    rows = [str(row["purchased_on"]) for row in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_shopping_history_counts_between(email, start_date, end_date):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT purchased_on, COUNT(*) AS list_count
+        FROM shopping_history
+        WHERE email = ? AND purchased_on BETWEEN ? AND ?
+        GROUP BY purchased_on
+        ORDER BY purchased_on ASC
+        """,
+        (email, start_date, end_date),
+    )
+    rows = {str(row["purchased_on"]): int(row["list_count"] or 0) for row in cur.fetchall()}
+    conn.close()
+    return rows
+
+
+def list_shopping_history_for_day(email, day_iso):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, purchased_on, purchased_time_hhmm, items_json, created_at
+        FROM shopping_history
+        WHERE email = ? AND purchased_on = ?
+        ORDER BY id DESC
+        """,
+        (email, str(day_iso or "").strip()),
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    out = []
+    for row in rows:
+        try:
+            items = json.loads(row["items_json"] or "[]")
+        except Exception:
+            items = []
+        normalized_items = []
+        for item in items:
+            normalized_items.append(
+                {
+                    "name": str((item or {}).get("name", "")).strip(),
+                    "quantity": float((item or {}).get("quantity") or 0),
+                    "unit": str((item or {}).get("unit", "")).strip(),
+                }
+            )
+        time_hhmm = str(row["purchased_time_hhmm"] or "").strip() or "--:--"
+        out.append(
+            {
+                "id": int(row["id"]),
+                "purchased_on": row["purchased_on"],
+                "created_at": row["created_at"],
+                "time_hhmm": time_hhmm,
+                "items": normalized_items,
+            }
+        )
+    return out
+
+
+def delete_shopping_history_entry(email, entry_id):
+    if not str(entry_id).isdigit():
+        return False
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        DELETE FROM shopping_history
+        WHERE email = ? AND id = ?
+        """,
+        (email, int(entry_id)),
+    )
+    ok = (cur.rowcount or 0) > 0
+    conn.commit()
+    conn.close()
+    return ok
 
 
 def set_shopping_items_order(email, item_ids):

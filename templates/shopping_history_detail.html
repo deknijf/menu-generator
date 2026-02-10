@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Boodschappen geschiedenis</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="/static/styles.css?v=20260210v25" />
+</head>
+<body class="shopping-history-page">
+  <div class="app-layout">
+    <aside class="sidebar">
+      <div class="brand-block">
+        <img src="/static/logo-mark.svg" alt="Meal Planner logo" class="brand-logo" />
+        <p class="brand-name">Meal Planner</p>
+      </div>
+      <nav class="sidebar-nav">
+        <a class="side-item" href="/" onclick="localStorage.setItem('active_tab','dashboard')">
+          <span class="side-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M4 10.5L12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-5H10v5H5a1 1 0 0 1-1-1z"/></svg>
+          </span>
+          <span class="side-label">Dashboard</span>
+        </a>
+        <a class="side-item" href="/" onclick="localStorage.setItem('active_tab','planner')">
+          <span class="side-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>
+          </span>
+          <span class="side-label">Planner</span>
+        </a>
+        <a class="side-item" href="/" onclick="localStorage.setItem('active_tab','shopping')">
+          <span class="side-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M6 6h14l-2 8H8L6 6z"/><path d="M6 6L5 3H3"/><circle cx="9" cy="18" r="1.6"/><circle cx="17" cy="18" r="1.6"/></svg>
+          </span>
+          <span class="side-label">Boodschappen</span>
+        </a>
+        <a class="side-item" href="/" onclick="localStorage.setItem('active_tab','my-meals')">
+          <span class="side-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="4.2"/>
+              <path d="M12 4.2a7.8 7.8 0 0 1 5.9 2.7"/>
+              <path d="M12 19.8a7.8 7.8 0 0 1-5.9-2.7"/>
+              <path d="M3.8 4.5v8.5"/>
+              <path d="M2.5 4.5v4.5M5.1 4.5v4.5"/>
+              <path d="M3.8 13v6.5"/>
+              <path d="M20.2 4.5v15"/>
+              <path d="M20.2 4.5c-1.8 0-3.3 1.5-3.3 3.3V13"/>
+            </svg>
+          </span>
+          <span class="side-label">Mijn maaltijden</span>
+        </a>
+        <a class="side-item active" href="/" onclick="localStorage.setItem('active_tab','history')">
+          <span class="side-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="8"/>
+              <path d="M12 7v5l3 2"/>
+            </svg>
+          </span>
+          <span class="side-label">Geschiedenis</span>
+        </a>
+        <a class="side-item" href="/" onclick="localStorage.setItem('active_tab','profile')">
+          <span class="side-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="3.4"/><path d="M5 20a7 7 0 0 1 14 0"/></svg>
+          </span>
+          <span class="side-label">Profiel</span>
+        </a>
+      </nav>
+      <div class="sidebar-foot">
+        <a class="side-item side-logout" href="/logout">
+          <span class="side-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M10 4h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-8"/><path d="M13 12H4"/><path d="M8 8l-4 4 4 4"/></svg>
+          </span>
+          <span class="side-label">Uitloggen</span>
+        </a>
+      </div>
+    </aside>
+
+    <main class="main-shell">
+      <header class="topbar card">
+        <div class="topbar-actions">
+          <div class="topbar-brand">
+            <img class="topbar-brand-icon" src="/static/logo-mark.svg" alt="Meal Planner logo" />
+            <span class="topbar-brand-text">
+              <span class="brand-meal">Meal</span>
+              <span class="brand-planner">Planner</span>
+            </span>
+          </div>
+          <div class="history-topbar-actions">
+            <a class="user-pill user-link history-user-pill" href="/" onclick="localStorage.setItem('active_tab','history')">{{ user.email }}</a>
+            <a class="btn btn-ghost history-back-btn history-topbar-back" href="/" onclick="localStorage.setItem('active_tab','history')">Terug</a>
+          </div>
+        </div>
+      </header>
+
+      <section class="card detail-card shopping-history-detail-card">
+        <div class="detail-head">
+          <div class="shopping-history-hero-text">
+            <h3>Boodschappen aangekocht op {{ day_label }}</h3>
+            <p class="muted">Overzicht van alle boodschappenlijsten die op deze dag als gekocht gemarkeerd zijn.</p>
+          </div>
+        </div>
+
+        {% if entries %}
+        <div class="shopping-history-grid">
+          {% for entry in entries %}
+          <article class="shopping-history-list" data-entry-id="{{ entry['id'] }}">
+            <div class="shopping-history-list-head">
+              <h4>
+                <span class="shopping-history-list-title">Boodschappenlijst</span>
+                <span class="shopping-history-time-badge">{{ entry["time_hhmm"] }}</span>
+              </h4>
+              <button class="shop-history-delete-btn" type="button" aria-label="Verwijder lijst" title="Verwijder lijst">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v8h-2V9zm4 0h2v8h-2V9zM8 9h2v8H8V9zm-1 12h10a2 2 0 0 0 2-2V7H5v12a2 2 0 0 0 2 2z"></path>
+                </svg>
+              </button>
+            </div>
+            <ul>
+              {% for item in entry["items"] %}
+              <li>
+                <span>{{ item.name }}</span>
+                <strong>{{ "%.1f"|format(item.quantity) if item.quantity % 1 else item.quantity|int }} {{ item.unit }}</strong>
+              </li>
+              {% endfor %}
+            </ul>
+          </article>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="muted">Geen boodschappenlijsten gevonden op deze datum.</p>
+        {% endif %}
+      </section>
+    </main>
+  </div>
+  <script>
+    document.querySelectorAll(".shopping-history-list[data-entry-id]").forEach((card) => {
+      const btn = card.querySelector(".shop-history-delete-btn");
+      if (!btn) return;
+      btn.addEventListener("click", async () => {
+        const entryId = Number(card.dataset.entryId || 0);
+        if (!entryId) return;
+        btn.disabled = true;
+        const res = await fetch(`/api/shopping-history/${entryId}`, { method: "DELETE" });
+        if (!res.ok) {
+          btn.disabled = false;
+          return;
+        }
+        card.remove();
+        if (!document.querySelector(".shopping-history-list[data-entry-id]")) {
+          window.location.reload();
+        }
+      });
+    });
+  </script>
+</body>
+</html>

@@ -2,7 +2,8 @@
   "app": {
     "name": "Menu Planner",
     "secret_key": "replace-me-in-production",
-    "base_servings": 2
+    "base_servings": 2,
+    "time_zone": "CEST"
   },
   "auth": {
     "admin_email": "admin@example.com",
