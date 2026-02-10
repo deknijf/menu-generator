@@ -1557,35 +1557,29 @@ input[type="password"] {
   color: #5d7388;
 }
 
-.history-topbar-actions {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.history-user-pill {
-  position: static;
-}
-
-.history-topbar-back {
-  order: 2;
-}
-
-.history-user-pill {
-  order: 1;
-}
-
 .history-back-btn {
   color: #2f5977;
   border-color: #b8d0e1;
   background: rgba(255, 255, 255, 0.86);
-  align-self: flex-start;
+  margin-left: auto;
+  flex: 0 0 auto;
 }
 
 .history-back-btn:hover {
   background: #ffffff;
   border-color: #95bdd8;
+}
+
+.shopping-history-detail-card .detail-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.8rem;
+}
+
+.shopping-history-detail-card .shopping-history-hero-text {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .shopping-history-grid {
@@ -2273,10 +2267,15 @@ a.history-day-meal:hover {
     min-height: auto;
   }
 
-  .history-topbar-actions {
-    width: 100%;
-    justify-content: flex-end;
-    flex-wrap: wrap;
+  .shopping-history-detail-card .detail-head {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.55rem;
+  }
+
+  .history-back-btn {
+    margin-left: 0;
+    justify-self: start;
   }
 
   .history-actions {

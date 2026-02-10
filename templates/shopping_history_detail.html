@@ -86,10 +86,7 @@
               <span class="brand-planner">Planner</span>
             </span>
           </div>
-          <div class="history-topbar-actions">
-            <a class="user-pill user-link history-user-pill" href="/" onclick="localStorage.setItem('active_tab','history')">{{ user.email }}</a>
-            <a class="btn btn-ghost history-back-btn history-topbar-back" href="/" onclick="localStorage.setItem('active_tab','history')">Terug</a>
-          </div>
+          <a class="user-pill user-link" href="/" onclick="localStorage.setItem('active_tab','history')">{{ user.email }}</a>
         </div>
       </header>
 
@@ -99,6 +96,7 @@
             <h3>Boodschappen aangekocht op {{ day_label }}</h3>
             <p class="muted">Overzicht van alle boodschappenlijsten die op deze dag als gekocht gemarkeerd zijn.</p>
           </div>
+          <a class="btn btn-ghost history-back-btn" href="/" onclick="localStorage.setItem('active_tab','history')">Terug</a>
         </div>
 
         {% if entries %}
