@@ -8,7 +8,7 @@ Webapp voor weekmenu-planning met focus op:
 - persoonlijke allergieen instellen via profielpagina
 - boodschappenlijst op basis van geplande maaltijden
 - login met e-mail en wachtwoord
-- 1 admin account (`bert.deknijf@gmail.com`) + extra accounts via config
+- 1 admin account (`admin@example.com`) + extra accounts via config
 - datumweergave in Europees formaat (`dd/mm/jjjj`)
 
 ## Stack
@@ -17,6 +17,8 @@ Webapp voor weekmenu-planning met focus op:
 - Docker + docker-compose
 
 ## Configuratie
+Gebruik `config/settings.json.example` als startpunt en maak lokaal `config/settings.json` aan (staat in `.gitignore`).
+
 Pas `config/settings.json` aan voor:
 - `auth.admin_email`
 - `auth.local_users` (accounts met e-mail/wachtwoord)
@@ -27,8 +29,8 @@ Pas `config/settings.json` aan voor:
 
 ### Test-login standaard
 In `config/settings.json` staat standaard:
-- e-mail: `bert.deknijf@gmail.com`
-- wachtwoord: `admin1234`
+- e-mail: `admin@example.com`
+- wachtwoord: `choose-a-strong-password`
 
 Wijzig dit meteen voor productie.
 
@@ -66,6 +68,6 @@ Vereiste GitHub repository secrets:
 
 ## Dev login (optioneel)
 Als `auth.allow_dev_login` op `true` staat, kan je ook testen via:
-- `/auth/dev?email=bert.deknijf@gmail.com`
+- `/auth/dev?email=admin@example.com`
 
 Zet `auth.allow_dev_login` op `false` om dit uit te schakelen.

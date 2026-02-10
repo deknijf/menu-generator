@@ -1,0 +1,22 @@
+{
+  "app": {
+    "name": "Menu Planner",
+    "secret_key": "replace-me-in-production",
+    "base_servings": 2
+  },
+  "auth": {
+    "admin_email": "admin@example.com",
+    "allowed_emails": [
+      "admin@example.com",
+      "family.member@example.com"
+    ],
+    "allow_dev_login": false,
+    "local_users": [
+      {
+        "email": "admin@example.com",
+        "name": "Admin User",
+        "password": "choose-a-strong-password"
+      }
+    ]
+  }
+}
