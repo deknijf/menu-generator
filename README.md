@@ -48,6 +48,22 @@ docker compose up --build
 ```
 Open: `http://localhost:8000`
 
+## Git tag -> Docker Hub release
+Bij elke push van een git tag start GitHub Actions automatisch een build en push naar:
+- `deknijf/menu-generator:<git-tag>`
+
+Voorbeeld:
+```bash
+git tag v1.2.3
+git push origin v1.2.3
+```
+Resultaat:
+- `deknijf/menu-generator:v1.2.3`
+
+Vereiste GitHub repository secrets:
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN` (Docker Hub access token)
+
 ## Dev login (optioneel)
 Als `auth.allow_dev_login` op `true` staat, kan je ook testen via:
 - `/auth/dev?email=bert.deknijf@gmail.com`
