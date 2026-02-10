@@ -1,6 +1,6 @@
 services:
   menu-generator:
-    image: deknijf/menu-generator:v0.3.0
+    build: .
     container_name: menu-generator
     ports:
       - "8000:8000"
