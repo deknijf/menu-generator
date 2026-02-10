@@ -8,6 +8,7 @@ DEFAULT_SETTINGS = {
         "name": "Menu Planner",
         "secret_key": "change-this-secret",
         "base_servings": 2,
+        "time_zone": "UTC",
     },
     "auth": {
         "admin_email": "bert.deknijf@gmail.com",

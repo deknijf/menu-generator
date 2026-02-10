@@ -3,6 +3,8 @@ const state = {
   days: [],
   plan: [],
   shopping: [],
+  historyDays: [],
+  historyMonthAnchor: null,
   settings: null,
   profileAllergies: [],
   profileLikes: [],
@@ -61,6 +63,24 @@ function weekdayShort(isoDate) {
   return names[date.getDay()];
 }
 
+function monthLabel(date) {
+  const months = [
+    "januari",
+    "februari",
+    "maart",
+    "april",
+    "mei",
+    "juni",
+    "juli",
+    "augustus",
+    "september",
+    "oktober",
+    "november",
+    "december",
+  ];
+  return `${months[date.getMonth()]} ${date.getFullYear()}`;
+}
+
 function prettyQuantity(value) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
@@ -107,12 +127,36 @@ function isVegetarianMeal(name) {
   return !hasAny(needle, meatLikeTokens);
 }
 
+function monthStart(date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function shiftMonth(date, delta) {
+  return new Date(date.getFullYear(), date.getMonth() + delta, 1);
+}
+
+function clampHistoryAnchor(date) {
+  const now = monthStart(new Date());
+  const min = shiftMonth(now, -12);
+  const max = shiftMonth(now, 12);
+  const anchor = monthStart(date);
+  if (anchor < min) return min;
+  if (anchor > max) return max;
+  return anchor;
+}
+
 function getWeekMonday(date) {
   const clone = new Date(date);
   const day = clone.getDay();
   const mondayOffset = day === 0 ? -6 : 1 - day;
   clone.setDate(clone.getDate() + mondayOffset);
   return clone;
+}
+
+function getMonthBounds(anchorDate) {
+  const first = new Date(anchorDate.getFullYear(), anchorDate.getMonth(), 1);
+  const last = new Date(anchorDate.getFullYear(), anchorDate.getMonth() + 1, 0);
+  return [iso(first), iso(last)];
 }
 
 function mealImageFor(item) {
@@ -814,6 +858,98 @@ async function loadCalendar() {
   renderDashboard();
 }
 
+async function loadHistoryCalendar() {
+  if (!state.historyMonthAnchor) {
+    const now = new Date();
+    state.historyMonthAnchor = new Date(now.getFullYear(), now.getMonth(), 1);
+  }
+  state.historyMonthAnchor = clampHistoryAnchor(state.historyMonthAnchor);
+  const [start, end] = getMonthBounds(state.historyMonthAnchor);
+  const res = await fetch(`/api/calendar?start=${start}&end=${end}`);
+  if (!res.ok) return;
+  const data = await res.json();
+  state.historyDays = data.days || [];
+  renderHistoryCalendar();
+}
+
+function renderHistoryCalendar() {
+  const root = document.getElementById("history-calendar");
+  const label = document.getElementById("history-month-label");
+  const prevBtn = document.getElementById("history-prev-btn");
+  const nextBtn = document.getElementById("history-next-btn");
+  if (!root || !label || !state.historyMonthAnchor) return;
+
+  root.innerHTML = "";
+  label.textContent = monthLabel(state.historyMonthAnchor);
+
+  const now = monthStart(new Date());
+  const min = shiftMonth(now, -12);
+  const max = shiftMonth(now, 12);
+  if (prevBtn) prevBtn.disabled = state.historyMonthAnchor <= min;
+  if (nextBtn) nextBtn.disabled = state.historyMonthAnchor >= max;
+
+  const headers = ["maandag", "dinsdag", "woensdag", "donderdag", "vrijdag", "zaterdag", "zondag"];
+  headers.forEach((name) => {
+    const h = document.createElement("div");
+    h.className = "history-weekday";
+    h.textContent = name;
+    root.appendChild(h);
+  });
+
+  if (!state.historyDays.length) return;
+
+  const firstDate = parseIsoDate(state.historyDays[0].date);
+  const weekday = firstDate.getDay();
+  const mondayIndex = weekday === 0 ? 6 : weekday - 1;
+  for (let i = 0; i < mondayIndex; i++) {
+    const spacer = document.createElement("div");
+    spacer.className = "history-day-spacer";
+    root.appendChild(spacer);
+  }
+
+  const todayIso = iso(new Date());
+
+  state.historyDays.forEach((day) => {
+    const hasMeal = Boolean(day.meal_name);
+    const hasShopping = Boolean(day.shopping_done);
+    const isToday = day.date === todayIso;
+    const cell = document.createElement("article");
+    cell.className = `history-day${hasMeal ? " has-meal" : ""}${hasShopping ? " has-shopping" : ""}${isToday ? " is-today" : ""}`;
+
+    const top = document.createElement("div");
+    top.className = "history-day-top";
+    const dateEl = document.createElement("strong");
+    dateEl.textContent = formatDateEu(day.date);
+    const weekEl = document.createElement("em");
+    weekEl.textContent = weekdayShort(day.date);
+    top.appendChild(dateEl);
+    top.appendChild(weekEl);
+
+    cell.appendChild(top);
+
+    const content = document.createElement(hasMeal ? "a" : "span");
+    content.className = "history-day-meal";
+    if (hasMeal && day.meal_id) {
+      content.href = `/meal/${encodeURIComponent(day.meal_id)}?date=${encodeURIComponent(formatDateEu(day.date))}&person_count=${encodeURIComponent(String(getPersonCount()))}`;
+      content.title = day.meal_name;
+    }
+    content.textContent = hasMeal ? day.meal_name : "Geen maaltijd";
+    cell.appendChild(content);
+
+    if (hasShopping) {
+      const shoppingTag = document.createElement("a");
+      shoppingTag.className = "history-day-shopping";
+      shoppingTag.href = `/shopping-history/${encodeURIComponent(day.date)}`;
+      const shoppingCount = Number(day.shopping_count || 0);
+      const extraCount = Math.max(0, shoppingCount - 1);
+      shoppingTag.textContent = extraCount > 0 ? `Boodschappen +${extraCount}` : "Boodschappen";
+      cell.appendChild(shoppingTag);
+    }
+
+    root.appendChild(cell);
+  });
+}
+
 function renderCalendar() {
   const root = document.getElementById("calendar");
   root.innerHTML = "";
@@ -983,6 +1119,8 @@ function renderShopping() {
   const statTotal = document.getElementById("shopping-stat-total");
   const statOpen = document.getElementById("shopping-stat-open");
   const statDone = document.getElementById("shopping-stat-done");
+  const completeWrap = document.getElementById("shopping-complete-wrap");
+  const completeBtn = document.getElementById("shopping-complete-btn");
 
   if (openList) openList.innerHTML = "";
   if (doneList) doneList.innerHTML = "";
@@ -991,6 +1129,8 @@ function renderShopping() {
     sideMore.hidden = true;
     sideMore.textContent = "";
   }
+  if (completeWrap) completeWrap.hidden = true;
+  if (completeBtn) completeBtn.disabled = true;
 
   if (!state.shopping.length) {
     if (openList) openList.innerHTML = "<li>Genereer eerst je boodschappenlijst.</li>";
@@ -999,6 +1139,8 @@ function renderShopping() {
     if (statOpen) statOpen.textContent = "0";
     if (statDone) statDone.textContent = "0";
     if (sideList) sideList.innerHTML = "<li>Nog geen items.</li>";
+    if (completeWrap) completeWrap.hidden = true;
+    if (completeBtn) completeBtn.disabled = true;
     return;
   }
 
@@ -1009,6 +1151,8 @@ function renderShopping() {
   if (statTotal) statTotal.textContent = String(ordered.length);
   if (statOpen) statOpen.textContent = String(openItems.length);
   if (statDone) statDone.textContent = String(doneItems.length);
+  if (completeWrap) completeWrap.hidden = false;
+  if (completeBtn) completeBtn.disabled = doneItems.length === 0;
 
   function renderItem(item, idx, rootList) {
     if (!rootList) return;
@@ -1169,6 +1313,17 @@ function renderShopping() {
   bindDragForList(doneList, doneItems);
 }
 
+async function completeShoppingList() {
+  const res = await fetch("/api/shopping-list/complete", {
+    method: "POST",
+  });
+  if (!res.ok) return;
+  const data = await res.json();
+  state.shopping = normalizeShoppingItems(data.items || []);
+  renderShopping();
+  await loadHistoryCalendar();
+}
+
 function renderDashboard() {
   const cookDays = state.days.filter((d) => d.cook).length;
   const skipDays = state.days.filter((d) => !d.cook).length;
@@ -1291,6 +1446,7 @@ async function boot() {
   await fetchProfileSettings();
   await loadCustomMeals();
   await loadCalendar();
+  await loadHistoryCalendar();
   await loadShoppingList();
 
   document.getElementById("start-date").addEventListener("change", async () => {
@@ -1307,6 +1463,7 @@ async function boot() {
   document.getElementById("shopping-btn").addEventListener("click", generateShoppingList);
   document.getElementById("shopping-refresh-btn").addEventListener("click", generateShoppingList);
   document.getElementById("shopping-clear-btn").addEventListener("click", clearShoppingList);
+  document.getElementById("shopping-complete-btn").addEventListener("click", completeShoppingList);
   document.getElementById("hero-generate-btn").addEventListener("click", generateMeals);
   document.getElementById("hero-shopping-btn").addEventListener("click", generateShoppingList);
   document.getElementById("save-profile-btn").addEventListener("click", saveProfileAllergies);
@@ -1317,6 +1474,19 @@ async function boot() {
   document.getElementById("cm-bulk-export-btn").addEventListener("click", exportBulkTemplate);
   document.getElementById("cm-bulk-upload-btn").addEventListener("click", uploadBulkTemplate);
   document.getElementById("add-extra-item-btn").addEventListener("click", addExtraShoppingItem);
+  document.getElementById("history-prev-btn").addEventListener("click", async () => {
+    state.historyMonthAnchor = shiftMonth(state.historyMonthAnchor, -1);
+    await loadHistoryCalendar();
+  });
+  document.getElementById("history-next-btn").addEventListener("click", async () => {
+    state.historyMonthAnchor = shiftMonth(state.historyMonthAnchor, 1);
+    await loadHistoryCalendar();
+  });
+  document.getElementById("history-today-btn").addEventListener("click", async () => {
+    const now = new Date();
+    state.historyMonthAnchor = new Date(now.getFullYear(), now.getMonth(), 1);
+    await loadHistoryCalendar();
+  });
   document.getElementById("user-info").addEventListener("click", (event) => {
     event.preventDefault();
     activateTab("profile");
