@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Gebruiker bewerken</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260210v17" />
+</head>
+<body class="shopping-history-page">
+  <div class="app-layout">
+    <aside class="sidebar">
+      <div class="brand-block">
+        <img src="/static/logo-mark.svg" alt="Meal Planner logo" class="brand-logo" />
+        <p class="brand-name">Meal Planner</p>
+      </div>
+      <nav class="sidebar-nav">
+        <a class="side-item" href="/" onclick="localStorage.setItem('active_tab','dashboard')"><span class="side-label">Dashboard</span></a>
+        <a class="side-item" href="/" onclick="localStorage.setItem('active_tab','planner')"><span class="side-label">Planner</span></a>
+        <a class="side-item" href="/" onclick="localStorage.setItem('active_tab','shopping')"><span class="side-label">Boodschappen</span></a>
+        <a class="side-item" href="/" onclick="localStorage.setItem('active_tab','my-meals')"><span class="side-label">Mijn maaltijden</span></a>
+        <a class="side-item" href="/" onclick="localStorage.setItem('active_tab','history')"><span class="side-label">Geschiedenis</span></a>
+        <a class="side-item active" href="/" onclick="localStorage.setItem('active_tab','profile')"><span class="side-label">Profiel</span></a>
+      </nav>
+      <div class="sidebar-foot">
+        <a class="side-item side-logout" href="/logout"><span class="side-label">Uitloggen</span></a>
+      </div>
+    </aside>
+
+    <main class="main-shell">
+      <header class="topbar card">
+        <div class="topbar-actions">
+          <div class="topbar-brand">
+            <img class="topbar-brand-icon" src="/static/logo-mark.svg" alt="Meal Planner logo" />
+            <span class="topbar-brand-text"><span class="brand-meal">Meal</span> <span class="brand-planner">Planner</span></span>
+          </div>
+          <a class="user-pill user-link" href="/">{{ user.email }}</a>
+        </div>
+      </header>
+
+      <section class="card detail-card shopping-history-detail-card">
+        <div class="detail-head">
+          <div class="shopping-history-hero-text">
+            <h3>Gebruiker bewerken</h3>
+            <p class="muted">Pas gebruikersgegevens, rol, groep en wachtwoord aan.</p>
+          </div>
+          <div class="detail-head-actions">
+            {% if can_delete_account and not target_is_super_admin %}
+            <button id="account-delete-btn" class="btn btn-primary" type="button">Verwijder</button>
+            {% endif %}
+            <a class="btn btn-ghost history-back-btn" href="/" onclick="localStorage.setItem('active_tab','profile')">Terug</a>
+          </div>
+        </div>
+
+        <form id="account-detail-form" class="detail-form-grid" data-email="{{ target.email }}" data-primary-admin-email="{{ primary_admin_email }}">
+          <label>Naam
+            <input id="account-name" type="text" value="{{ target.name }}" />
+          </label>
+          <label>E-mail
+            <input id="account-email" type="email" value="{{ target.email }}" />
+          </label>
+          <label>Rol
+            <select id="account-role" {% if target_is_super_admin %}disabled{% endif %}>
+              <option value="user" {% if (not target.is_admin) and (not target.is_group_admin) %}selected{% endif %}>Gebruiker</option>
+              <option value="group_admin" {% if target.is_group_admin %}selected{% endif %}>Groep admin</option>
+              {% if can_edit_global_role %}
+              <option value="admin" {% if target.is_admin %}selected{% endif %}>Admin</option>
+              {% endif %}
+            </select>
+            {% if target_is_super_admin %}
+            <span class="profile-account-role profile-account-role-super">super admin</span>
+            {% endif %}
+          </label>
+          <label>Groep
+            <select id="account-group" {% if not can_edit_global_role %}disabled{% endif %}>
+              {% for group in groups %}
+              <option value="{{ group.id }}" {% if target_group_id == group.id %}selected{% endif %}>{{ group.name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Nieuw wachtwoord (optioneel)
+            <input id="account-password" type="password" placeholder="Minstens 8 tekens" />
+          </label>
+          <div class="button-row">
+            <button class="btn btn-primary" type="submit">Opslaan</button>
+            <span id="account-save-status" class="muted"></span>
+          </div>
+        </form>
+      </section>
+    </main>
+  </div>
+  <script>
+    (function () {
+      const form = document.getElementById("account-detail-form");
+      const status = document.getElementById("account-save-status");
+      const deleteBtn = document.getElementById("account-delete-btn");
+      if (!form) return;
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        status.textContent = "";
+        const currentEmail = String(form.dataset.email || "").trim().toLowerCase();
+        const name = document.getElementById("account-name").value.trim();
+        const email = document.getElementById("account-email").value.trim().toLowerCase();
+        const role = document.getElementById("account-role").value;
+        const group_id = Number(document.getElementById("account-group").value || 0);
+        const password = document.getElementById("account-password").value || "";
+
+        const payload = { name, email, role, group_id, password };
+        const res = await fetch(`/api/accounts/${encodeURIComponent(currentEmail)}/detail`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          status.textContent = data.error || "Opslaan mislukt.";
+          return;
+        }
+        status.textContent = "Opgeslagen.";
+        form.dataset.email = String(data.item?.email || email || currentEmail).toLowerCase();
+        if (password) document.getElementById("account-password").value = "";
+      });
+
+      if (deleteBtn) {
+        deleteBtn.addEventListener("click", async () => {
+          const currentEmail = String(form.dataset.email || "").trim().toLowerCase();
+          const displayName = String(document.getElementById("account-name").value || currentEmail).trim();
+          const confirmed = window.confirm(`Ben je zeker dat je gebruiker "${displayName}" wil verwijderen?`);
+          if (!confirmed) return;
+          status.textContent = "";
+          const res = await fetch(`/api/accounts/${encodeURIComponent(currentEmail)}`, { method: "DELETE" });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            status.textContent = data.error || "Verwijderen mislukt.";
+            return;
+          }
+          window.location.href = "/#profile";
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -7,7 +7,7 @@
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="/static/styles.css?v=20260210v12" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260210v17" />
 </head>
 <body>
   <div class="app-layout">
@@ -355,10 +355,21 @@
         <section class="card">
           <h3>Profiel en voorkeuren</h3>
           <div class="profile-grid">
-            <div><p class="key">Ingelogde gebruiker</p><p id="profile-user" class="val">-</p></div>
+            <div>
+              <p class="key">Naam</p>
+              <input id="profile-name" type="text" placeholder="Volledige naam" />
+            </div>
+            <div>
+              <p class="key">E-mail</p>
+              <input id="profile-email" type="email" placeholder="naam@domein.be" />
+            </div>
             <div><p class="key">Rol</p><p id="profile-role" class="val">-</p></div>
-            <div><p class="key">Admin e-mail</p><p id="profile-admin" class="val">-</p></div>
-            <div><p class="key">Toegelaten accounts</p><p id="profile-allowed" class="val">-</p></div>
+            <div><p class="key">Groep</p><p id="profile-group" class="val">-</p></div>
+          </div>
+          <div id="profile-admin-groups-wrap" class="chip-field profile-admin-groups" hidden>
+            <h4>Groepen (admin)</h4>
+            <p class="muted">Selecteer de groepen waar dit admin-account toegang toe heeft.</p>
+            <div id="profile-admin-groups-list" class="toggle-list"></div>
           </div>
 
           <div class="profile-editor">
@@ -372,21 +383,56 @@
             <p id="profile-menu-mode-help" class="muted"></p>
             <p id="profile-ai-optional-note" class="muted"></p>
 
-            <div id="profile-admin-settings" class="profile-settings-grid">
+            <div class="profile-settings-grid">
               <div class="chip-field">
-                <h4>Admin account (globaal)</h4>
-                <label for="profile-admin-email">Admin e-mail</label>
-                <input id="profile-admin-email" type="email" placeholder="admin@example.com" />
-                <label for="profile-admin-name">Admin naam</label>
-                <input id="profile-admin-name" type="text" placeholder="Naam" />
-                <label for="profile-admin-password">Nieuw admin wachtwoord</label>
-                <input id="profile-admin-password" type="password" placeholder="Laat leeg om niet te wijzigen" />
+                <h4>Mijn wachtwoord</h4>
+                <label for="profile-current-password">Huidig wachtwoord</label>
+                <input id="profile-current-password" type="password" placeholder="Huidig wachtwoord" />
+                <label for="profile-new-password">Nieuw wachtwoord</label>
+                <input id="profile-new-password" type="password" placeholder="Minstens 8 tekens" />
               </div>
+            </div>
 
-              <div class="chip-field">
-                <h4>Toegelaten accounts (globaal)</h4>
-                <p class="muted">Eén e-mail per lijn. Admin e-mail wordt automatisch toegevoegd.</p>
-                <textarea id="profile-allowed-emails" rows="5" placeholder="user1@example.com&#10;user2@example.com"></textarea>
+            <div class="profile-settings-grid">
+              <div id="profile-account-management" class="chip-field profile-span-all" hidden>
+                <h4>Nieuwe account aanmaken</h4>
+                <label for="profile-new-account-email">E-mail</label>
+                <input id="profile-new-account-email" type="email" placeholder="user@example.com" />
+                <label for="profile-new-account-name">Naam</label>
+                <input id="profile-new-account-name" type="text" placeholder="Volledige naam" />
+                <label for="profile-new-account-password">Wachtwoord</label>
+                <input id="profile-new-account-password" type="password" placeholder="Minstens 8 tekens" />
+                <div id="profile-new-account-group-select-wrap">
+                  <label for="profile-new-account-group">Groep</label>
+                  <select id="profile-new-account-group"></select>
+                </div>
+                <div id="profile-new-account-group-fixed-wrap" hidden>
+                  <p class="key">Groep</p>
+                  <p id="profile-new-account-group-fixed" class="val">-</p>
+                </div>
+                <div class="button-row">
+                  <button id="profile-create-account-btn" class="btn btn-primary" type="button">Maak account</button>
+                  <span id="profile-account-status" class="muted"></span>
+                </div>
+                <p class="muted">Admin kan accounts in alle groepen beheren. Groep-admin kan enkel accounts in de eigen groep beheren.</p>
+                <div id="profile-group-toolbar" class="profile-group-toolbar" hidden>
+                  <div class="profile-group-actions">
+                    <label for="profile-new-group-name">Nieuwe groep</label>
+                    <div class="profile-inline-actions">
+                      <input id="profile-new-group-name" type="text" placeholder="bv. Familie Janssens" />
+                      <button id="profile-create-group-btn" class="btn btn-secondary" type="button">Maak groep</button>
+                    </div>
+                  </div>
+                  <div class="profile-group-actions">
+                    <label for="profile-rename-group-select">Hernoem groep</label>
+                    <div class="profile-inline-actions profile-inline-actions-triple">
+                      <select id="profile-rename-group-select"></select>
+                      <input id="profile-rename-group-name" type="text" placeholder="Nieuwe groepsnaam" />
+                      <button id="profile-rename-group-btn" class="btn btn-secondary" type="button">Hernoem</button>
+                    </div>
+                  </div>
+                </div>
+                <ul id="profile-accounts-list" class="list-plain"></ul>
               </div>
             </div>
 
@@ -417,7 +463,7 @@
             </div>
 
             <div class="button-row">
-              <button id="save-profile-btn" class="btn btn-primary" type="button">Bewaar voorkeuren</button>
+              <button id="save-profile-btn" class="btn btn-primary" type="button">Opslaan</button>
               <span id="profile-save-status" class="muted"></span>
             </div>
           </div>
@@ -426,6 +472,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260210v23"></script>
+  <script src="/static/app.js?v=20260210v42"></script>
 </body>
 </html>
