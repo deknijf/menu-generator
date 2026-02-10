@@ -23,6 +23,7 @@ from .db import (
     get_auth_user,
     get_runtime_settings,
     create_custom_meal,
+    delete_shopping_item,
     delete_custom_meals,
     get_custom_meal,
     get_day,
@@ -34,6 +35,7 @@ from .db import (
     list_custom_meals,
     list_shopping_items,
     replace_shopping_items,
+    set_shopping_items_order,
     set_shopping_item_checked,
     set_day_cook,
     set_day_meal,
@@ -1154,12 +1156,36 @@ def register_routes(app):
         replace_shopping_items(user["email"], normalized)
         return jsonify({"ok": True, "items": _decorate_shopping_items(list_shopping_items(user["email"]))})
 
+    @app.put("/api/shopping-list/reorder")
+    def api_shopping_list_reorder():
+        user = _require_auth()
+        payload = request.get_json(force=True, silent=True) or {}
+        item_ids = payload.get("item_ids", [])
+        if not isinstance(item_ids, list) or not item_ids:
+            return jsonify({"error": "item_ids must be a non-empty list"}), 400
+        ok = set_shopping_items_order(user["email"], item_ids)
+        if not ok:
+            return jsonify({"error": "reorder failed"}), 400
+        normalized = _normalize_stored_shopping_items(list_shopping_items(user["email"]))
+        replace_shopping_items(user["email"], normalized)
+        return jsonify({"ok": True, "items": _decorate_shopping_items(list_shopping_items(user["email"]))})
+
     @app.put("/api/shopping-list/<int:item_id>")
     def api_shopping_list_update_item(item_id):
         user = _require_auth()
         payload = request.get_json(force=True, silent=True) or {}
         checked = _parse_bool(payload.get("checked", False))
         ok = set_shopping_item_checked(user["email"], item_id, checked)
+        if not ok:
+            return jsonify({"error": "item not found"}), 404
+        normalized = _normalize_stored_shopping_items(list_shopping_items(user["email"]))
+        replace_shopping_items(user["email"], normalized)
+        return jsonify({"ok": True, "items": _decorate_shopping_items(list_shopping_items(user["email"]))})
+
+    @app.delete("/api/shopping-list/<int:item_id>")
+    def api_shopping_list_delete_item(item_id):
+        user = _require_auth()
+        ok = delete_shopping_item(user["email"], item_id)
         if not ok:
             return jsonify({"error": "item not found"}), 404
         normalized = _normalize_stored_shopping_items(list_shopping_items(user["email"]))

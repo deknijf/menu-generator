@@ -960,12 +960,43 @@ def set_shopping_item_checked(email, item_id, checked):
     return ok
 
 
+def delete_shopping_item(email, item_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM shopping_items WHERE email = ? AND id = ?", (email, int(item_id)))
+    ok = (cur.rowcount or 0) > 0
+    conn.commit()
+    conn.close()
+    return ok
+
+
 def clear_shopping_items(email):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("DELETE FROM shopping_items WHERE email = ?", (email,))
     conn.commit()
     conn.close()
+
+
+def set_shopping_items_order(email, item_ids):
+    ids = [int(x) for x in (item_ids or []) if str(x).isdigit()]
+    if not ids:
+        return False
+
+    conn = get_conn()
+    cur = conn.cursor()
+    for idx, item_id in enumerate(ids):
+        cur.execute(
+            """
+            UPDATE shopping_items
+            SET sort_order = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE email = ? AND id = ?
+            """,
+            (idx, email, item_id),
+        )
+    conn.commit()
+    conn.close()
+    return True
 
 
 def clear_day_meals_between(start_date, end_date):
