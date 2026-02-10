@@ -70,6 +70,43 @@ function isFishMeal(name) {
   return needle.includes("zalm") || needle.includes("kabeljauw") || needle.includes("vis") || needle.includes("cod");
 }
 
+function isVegetarianMeal(name) {
+  const needle = String(name || "").toLowerCase();
+  if (!needle) return false;
+  const meatLikeTokens = [
+    "kip",
+    "chicken",
+    "rund",
+    "beef",
+    "gehakt",
+    "steak",
+    "hamburger",
+    "kalkoen",
+    "turkey",
+    "varken",
+    "pork",
+    "spek",
+    "bacon",
+    "ham",
+    "salami",
+    "worst",
+    "chorizo",
+    "lam",
+    "lams",
+    "kalf",
+    "veal",
+    "zalm",
+    "kabeljauw",
+    "tonijn",
+    "vis",
+    "fish",
+    "garnalen",
+    "shrimp",
+    "prawns",
+  ];
+  return !hasAny(needle, meatLikeTokens);
+}
+
 function getWeekMonday(date) {
   const clone = new Date(date);
   const day = clone.getDay();
@@ -379,9 +416,7 @@ async function fetchProfileSettings() {
   const allowed = data.auth?.allowed_emails || [];
   document.getElementById("profile-allowed").textContent = allowed.length ? allowed.join(", ") : "-";
   const adminPanel = document.getElementById("profile-admin-settings");
-  const globalPanel = document.getElementById("profile-global-settings");
   if (adminPanel) adminPanel.hidden = !Boolean(data.is_admin);
-  if (globalPanel) globalPanel.hidden = !Boolean(data.is_admin);
 
   const baseServings = data.app?.base_servings || 2;
   if (!document.getElementById("person-count").value) {
@@ -401,14 +436,6 @@ async function fetchProfileSettings() {
   document.getElementById("profile-admin-name").value = data.auth?.admin_email || "";
   document.getElementById("profile-admin-password").value = "";
   document.getElementById("profile-allowed-emails").value = (data.auth?.allowed_emails || []).join("\n");
-  document.getElementById("profile-nutrition-protein-weight").value = String(data.nutrition?.high_protein_weight ?? 1.3);
-  document.getElementById("profile-nutrition-carb-weight").value = String(data.nutrition?.low_carb_weight ?? 1.1);
-  document.getElementById("profile-nutrition-min-fish").value = String(data.nutrition?.weekly_min_fish ?? 0);
-  document.getElementById("profile-nutrition-west-pref").value = String(data.nutrition?.west_europe_preference ?? 2.2);
-  document.getElementById("profile-nutrition-asian-penalty").value = String(data.nutrition?.asian_penalty ?? 2.8);
-  document.getElementById("profile-family-allergies").value = (data.family?.allergies || []).join("\n");
-  document.getElementById("profile-family-likes").value = (data.family?.likes || []).join("\n");
-  document.getElementById("profile-family-dislikes").value = (data.family?.dislikes || []).join("\n");
 
   updateProfileMenuModeOptions();
 }
@@ -439,7 +466,10 @@ function updateProfilePreferencesHint() {
   const prefs = document.getElementById("profile-ai-preferences");
   if (!note || !select) return;
   const aiAllowed = select.value !== "custom_only";
-  if (prefs) prefs.hidden = !aiAllowed;
+  if (prefs) {
+    prefs.hidden = !aiAllowed;
+    prefs.style.display = aiAllowed ? "grid" : "none";
+  }
   note.textContent = aiAllowed
     ? "Allergieën, favorieten en afkeur zijn optioneel zolang AI-maaltijden toegelaten zijn."
     : "Je gebruikt nu alleen eigen maaltijden. Deze voorkeuren zijn niet verplicht en worden enkel gebruikt zodra AI weer aan staat.";
@@ -454,18 +484,6 @@ async function saveProfileAllergies() {
   const payload = { allergies, likes, dislikes, menu_mode };
   if (state.user?.is_admin) {
     payload.global = {
-      nutrition: {
-        high_protein_weight: Number(document.getElementById("profile-nutrition-protein-weight").value || 1.3),
-        low_carb_weight: Number(document.getElementById("profile-nutrition-carb-weight").value || 1.1),
-        weekly_min_fish: Number(document.getElementById("profile-nutrition-min-fish").value || 0),
-        west_europe_preference: Number(document.getElementById("profile-nutrition-west-pref").value || 2.2),
-        asian_penalty: Number(document.getElementById("profile-nutrition-asian-penalty").value || 2.8),
-      },
-      family: {
-        allergies: splitLinesText(document.getElementById("profile-family-allergies").value),
-        likes: splitLinesText(document.getElementById("profile-family-likes").value),
-        dislikes: splitLinesText(document.getElementById("profile-family-dislikes").value),
-      },
       auth: {
         admin_email: (document.getElementById("profile-admin-email").value || "").trim().toLowerCase(),
         admin_name: (document.getElementById("profile-admin-name").value || "").trim(),
@@ -958,32 +976,74 @@ function renderPlan() {
 }
 
 function renderShopping() {
-  const list = document.getElementById("shopping-list");
+  const openList = document.getElementById("shopping-list-open");
+  const doneList = document.getElementById("shopping-list-done");
   const sideList = document.getElementById("side-shopping-list");
-  list.innerHTML = "";
+  const sideMore = document.getElementById("side-shopping-more");
+  const statTotal = document.getElementById("shopping-stat-total");
+  const statOpen = document.getElementById("shopping-stat-open");
+  const statDone = document.getElementById("shopping-stat-done");
+
+  if (openList) openList.innerHTML = "";
+  if (doneList) doneList.innerHTML = "";
   if (sideList) sideList.innerHTML = "";
+  if (sideMore) {
+    sideMore.hidden = true;
+    sideMore.textContent = "";
+  }
 
   if (!state.shopping.length) {
-    list.innerHTML = "<li>Genereer eerst je boodschappenlijst.</li>";
+    if (openList) openList.innerHTML = "<li>Genereer eerst je boodschappenlijst.</li>";
+    if (doneList) doneList.innerHTML = "<li>Nog geen afgevinkte items.</li>";
+    if (statTotal) statTotal.textContent = "0";
+    if (statOpen) statOpen.textContent = "0";
+    if (statDone) statDone.textContent = "0";
     if (sideList) sideList.innerHTML = "<li>Nog geen items.</li>";
     return;
   }
 
   const ordered = sortedShoppingItems();
+  const sidePreviewLimit = 4;
+  const openItems = ordered.filter((item) => !item.checked);
+  const doneItems = ordered.filter((item) => item.checked);
+  if (statTotal) statTotal.textContent = String(ordered.length);
+  if (statOpen) statOpen.textContent = String(openItems.length);
+  if (statDone) statDone.textContent = String(doneItems.length);
 
-  ordered.forEach((item, idx) => {
+  function renderItem(item, idx, rootList) {
+    if (!rootList) return;
     const li = document.createElement("li");
-    li.className = item.checked ? "shopping-item checked" : "shopping-item";
+    li.className = item.checked ? "shopping-item checked shopping-item-done" : "shopping-item shopping-item-open";
+    li.dataset.itemId = String(item.id);
+    li.draggable = true;
     const qtyText = item.show_quantity ? `${prettyQuantity(item.quantity)} ${item.unit}`.trim() : "";
     li.innerHTML = `
+      <span class="drag-handle" title="Versleep item" aria-label="Versleep item">
+        <svg viewBox="0 0 10 14" aria-hidden="true">
+          <circle cx="2" cy="2" r="1"></circle>
+          <circle cx="8" cy="2" r="1"></circle>
+          <circle cx="2" cy="7" r="1"></circle>
+          <circle cx="8" cy="7" r="1"></circle>
+          <circle cx="2" cy="12" r="1"></circle>
+          <circle cx="8" cy="12" r="1"></circle>
+        </svg>
+      </span>
       <label class="shop-checkline">
         <input type="checkbox" ${item.checked ? "checked" : ""} />
         <span class="shop-text">${item.name}</span>
       </label>
-      <strong class="shop-qty">${qtyText}</strong>
+      <div class="shop-item-actions">
+        <strong class="shop-qty shop-qty-badge">${qtyText}</strong>
+        <button class="shop-delete-btn" type="button" aria-label="Verwijder item" title="Verwijder item">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v8h-2V9zm4 0h2v8h-2V9zM8 9h2v8H8V9zm-1 12h10a2 2 0 0 0 2-2V7H5v12a2 2 0 0 0 2 2z"></path>
+          </svg>
+        </button>
+      </div>
     `;
 
     const checkbox = li.querySelector("input[type='checkbox']");
+    const deleteBtn = li.querySelector(".shop-delete-btn");
     checkbox.addEventListener("change", async () => {
       checkbox.disabled = true;
       const res = await fetch(`/api/shopping-list/${encodeURIComponent(String(item.id))}`, {
@@ -1000,27 +1060,124 @@ function renderShopping() {
       renderShopping();
     });
 
-    list.appendChild(li);
+    if (deleteBtn) {
+      deleteBtn.addEventListener("click", async () => {
+        deleteBtn.disabled = true;
+        const res = await fetch(`/api/shopping-list/${encodeURIComponent(String(item.id))}`, {
+          method: "DELETE",
+        });
+        if (!res.ok) {
+          deleteBtn.disabled = false;
+          return;
+        }
+        const data = await res.json();
+        state.shopping = normalizeShoppingItems(data.items || []);
+        renderShopping();
+      });
+    }
 
-    if (sideList && idx < 6) {
+    rootList.appendChild(li);
+
+    if (sideList && idx < sidePreviewLimit) {
       const sli = document.createElement("li");
       sli.className = item.checked ? "checked" : "";
       const sideQty = item.show_quantity ? `${prettyQuantity(item.quantity)} ${item.unit}`.trim() : "";
       sli.innerHTML = `<span>${item.name}</span><strong>${sideQty}</strong>`;
       sideList.appendChild(sli);
     }
-  });
+  }
+
+  openItems.forEach((item, idx) => renderItem(item, idx, openList));
+  doneItems.forEach((item, idx) => renderItem(item, openItems.length + idx, doneList));
+
+  if (doneList && !doneItems.length) {
+    doneList.innerHTML = "<li>Nog geen afgevinkte items.</li>";
+  }
+
+  if (sideMore && ordered.length > sidePreviewLimit) {
+    const remaining = ordered.length - sidePreviewLimit;
+    sideMore.hidden = false;
+    sideMore.innerHTML = `<a href="#shopping">${remaining} extra ${remaining === 1 ? "item" : "items"} bekijken</a>`;
+    const link = sideMore.querySelector("a");
+    if (link) {
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        activateTab("shopping");
+      });
+    }
+  }
+
+  let dragItemId = null;
+
+  async function persistOrder() {
+    const item_ids = [...openItems, ...doneItems].map((item) => item.id);
+    const res = await fetch("/api/shopping-list/reorder", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ item_ids }),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    state.shopping = normalizeShoppingItems(data.items || []);
+    renderShopping();
+  }
+
+  function bindDragForList(listEl, sectionItems) {
+    if (!listEl) return;
+    const rows = listEl.querySelectorAll("li[data-item-id]");
+    rows.forEach((row) => {
+      const rowId = Number(row.dataset.itemId || 0);
+      row.addEventListener("dragstart", () => {
+        dragItemId = rowId;
+        row.classList.add("dragging");
+      });
+      row.addEventListener("dragend", () => {
+        dragItemId = null;
+        row.classList.remove("dragging");
+        listEl.querySelectorAll(".drop-target").forEach((el) => el.classList.remove("drop-target"));
+      });
+      row.addEventListener("dragover", (event) => {
+        if (!dragItemId || dragItemId === rowId) return;
+        event.preventDefault();
+        row.classList.add("drop-target");
+      });
+      row.addEventListener("dragleave", () => {
+        row.classList.remove("drop-target");
+      });
+      row.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        row.classList.remove("drop-target");
+        if (!dragItemId || dragItemId === rowId) return;
+
+        const fromIndex = sectionItems.findIndex((item) => item.id === dragItemId);
+        const targetIndex = sectionItems.findIndex((item) => item.id === rowId);
+        if (fromIndex < 0 || targetIndex < 0) return;
+
+        const bounds = row.getBoundingClientRect();
+        const insertAfter = event.clientY > bounds.top + bounds.height / 2;
+        const [moved] = sectionItems.splice(fromIndex, 1);
+        let nextIndex = targetIndex;
+        if (insertAfter) nextIndex += 1;
+        if (fromIndex < targetIndex) nextIndex -= 1;
+        sectionItems.splice(Math.max(0, Math.min(sectionItems.length, nextIndex)), 0, moved);
+        await persistOrder();
+      });
+    });
+  }
+
+  bindDragForList(openList, openItems);
+  bindDragForList(doneList, doneItems);
 }
 
 function renderDashboard() {
   const cookDays = state.days.filter((d) => d.cook).length;
   const skipDays = state.days.filter((d) => !d.cook).length;
-  const planned = state.days.filter((d) => d.cook && d.meal_name).length;
+  const vegetarianMeals = state.days.filter((d) => d.cook && d.meal_name && isVegetarianMeal(d.meal_name)).length;
   const fishMeals = state.days.filter((d) => isFishMeal(d.meal_name)).length;
 
   document.getElementById("metric-cook-days").textContent = String(cookDays);
   document.getElementById("metric-skip-days").textContent = String(skipDays);
-  document.getElementById("metric-planned").textContent = String(planned);
+  document.getElementById("metric-vegetarian").textContent = String(vegetarianMeals);
   document.getElementById("metric-fish").textContent = String(fishMeals);
   document.getElementById("cook-days-summary").textContent = `${cookDays} ${cookDays === 1 ? "dag" : "dagen"} zelf koken`;
 }

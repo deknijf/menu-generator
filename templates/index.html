@@ -2,12 +2,12 @@
 <html lang="nl">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Meal Planner</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="/static/styles.css?v=20260209v9" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260210v12" />
 </head>
 <body>
   <div class="app-layout">
@@ -112,13 +112,14 @@
               <button class="btn btn-primary" id="shopping-btn" type="button">Update</button>
             </div>
             <ul id="side-shopping-list" class="mini-list"></ul>
+            <p id="side-shopping-more" class="muted side-shopping-more" hidden></p>
           </aside>
         </section>
 
         <section class="metric-row">
           <article class="metric card"><p class="metric-label">Kookdagen</p><p class="metric-value" id="metric-cook-days">0</p></article>
           <article class="metric card"><p class="metric-label">Rustdagen</p><p class="metric-value" id="metric-skip-days">0</p></article>
-          <article class="metric card"><p class="metric-label">Gepland</p><p class="metric-value" id="metric-planned">0</p></article>
+          <article class="metric card"><p class="metric-label">Vegetarische maaltijden</p><p class="metric-value" id="metric-vegetarian">0</p></article>
           <article class="metric card"><p class="metric-label">Vismaaltijden</p><p class="metric-value" id="metric-fish">0</p></article>
         </section>
 
@@ -191,13 +192,27 @@
               <button class="mini-link" id="shopping-refresh-btn" type="button">Refresh</button>
             </div>
           </div>
-          <div class="shopping-tools">
+          <div class="shopping-stats">
+            <span class="shopping-stat"><small>Totaal</small><strong id="shopping-stat-total">0</strong></span>
+            <span class="shopping-stat"><small>Nog te kopen</small><strong id="shopping-stat-open">0</strong></span>
+            <span class="shopping-stat"><small>Afgevinkt</small><strong id="shopping-stat-done">0</strong></span>
+          </div>
+          <div class="shopping-tools shopping-toolbar">
             <input type="text" id="extra-item-name" placeholder="Extra item (bv. water)" />
             <input type="number" id="extra-item-qty" min="0" step="0.1" placeholder="Hoeveelheid" />
             <input type="text" id="extra-item-unit" placeholder="Unit (bv. l, stuk)" />
             <button id="add-extra-item-btn" class="btn btn-primary" type="button">Voeg toe</button>
           </div>
-          <ul id="shopping-list" class="shopping-list"></ul>
+          <div class="shopping-lists-grid">
+            <section class="shopping-list-section">
+              <h4 class="shopping-section-title">Nog te kopen</h4>
+              <ul id="shopping-list-open" class="shopping-list"></ul>
+            </section>
+            <section class="shopping-list-section">
+              <h4 class="shopping-section-title">Afgevinkt</h4>
+              <ul id="shopping-list-done" class="shopping-list"></ul>
+            </section>
+          </div>
         </section>
       </section>
 
@@ -341,32 +356,6 @@
               </div>
             </div>
 
-            <div id="profile-global-settings" class="profile-settings-grid">
-              <div class="chip-field">
-                <h4>Nutrition (globaal)</h4>
-                <label for="profile-nutrition-protein-weight">high_protein_weight</label>
-                <input id="profile-nutrition-protein-weight" type="number" step="0.1" />
-                <label for="profile-nutrition-carb-weight">low_carb_weight</label>
-                <input id="profile-nutrition-carb-weight" type="number" step="0.1" />
-                <label for="profile-nutrition-min-fish">weekly_min_fish</label>
-                <input id="profile-nutrition-min-fish" type="number" step="1" min="0" />
-                <label for="profile-nutrition-west-pref">west_europe_preference</label>
-                <input id="profile-nutrition-west-pref" type="number" step="0.1" />
-                <label for="profile-nutrition-asian-penalty">asian_penalty</label>
-                <input id="profile-nutrition-asian-penalty" type="number" step="0.1" />
-              </div>
-
-              <div class="chip-field">
-                <h4>Family voorkeuren (globaal)</h4>
-                <label for="profile-family-allergies">allergies (1 per lijn)</label>
-                <textarea id="profile-family-allergies" rows="4" placeholder="peanut&#10;shellfish"></textarea>
-                <label for="profile-family-likes">likes (1 per lijn)</label>
-                <textarea id="profile-family-likes" rows="4" placeholder="mediterranean&#10;fish"></textarea>
-                <label for="profile-family-dislikes">dislikes (1 per lijn)</label>
-                <textarea id="profile-family-dislikes" rows="4"></textarea>
-              </div>
-            </div>
-
             <div id="profile-ai-preferences" class="profile-preferences-grid">
               <div class="chip-field">
                 <h4>Allergieën</h4>
@@ -403,6 +392,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260209v13"></script>
+  <script src="/static/app.js?v=20260210v20"></script>
 </body>
 </html>
