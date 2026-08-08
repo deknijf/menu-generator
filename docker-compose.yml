@@ -4,7 +4,10 @@ services:
     container_name: menu-generator
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      # Host 8001, niet 8000: op de productieserver draait documentstore al op
+      # 8000, en de nginx vhost voor menu.deknijf.eu proxyt naar 127.0.0.1:8001.
+      # Wijzig dit niet zonder ook de vhost aan te passen.
+      - "8001:8000"
     volumes:
       - ./data:/app/data
       - ./config:/app/config

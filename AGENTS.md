@@ -265,8 +265,15 @@ internet. Beide feiten zijn relevant bij elke wijziging.
    `docker-compose.yml` een **expliciet gepinde tag**. Die moet handmatig mee omhoog.
 3. `systemctl restart meal-planner` doet `docker compose pull && up -d`.
 
-Nginx doet reverse proxy naar `127.0.0.1:8000`, met Let's Encrypt. Op dezelfde server
-draaien ook Immich en een docstore — niet aankomen.
+Nginx doet reverse proxy naar **`127.0.0.1:8001`**, met Let's Encrypt. Op dezelfde
+server draaien ook Immich en een docstore — niet aankomen. Die docstore heeft poort
+8000 al, vandaar dat de container op hostpoort 8001 zit. Overschrijf de compose op de
+server dus nooit klakkeloos met een variant die 8000 gebruikt: dan faalt de start met
+"port is already allocated" en ligt de site eruit.
+
+`~/meal-planner` op de server is **geen git clone** maar een losse map. Wijzigingen aan
+`docker-compose.yml` moeten daar met de hand gebeuren; maak eerst een kopie in
+`~/meal-planner-backups/`.
 
 Alleen `./data` en `./config` zijn gemount. **Alles buiten die twee mappen is weg na een
 redeploy.** Schrijf runtime-state dus nooit ergens anders naartoe.
