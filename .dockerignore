@@ -1,0 +1,32 @@
+# Secrets and local config — must never land in an image layer.
+.env
+.env.*
+!.env.example
+config/settings.json
+config/*.local.json
+
+# Runtime data (bind-mounted at run time, see docker-compose.yml)
+data/*.db
+data/*.db-*
+data/*.json
+data/pictures/
+
+# Local tooling
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# VCS and CI
+.git/
+.github/
+.gitignore
+
+# OS / editor temp files
+.DS_Store
+*.swp
+*.swo
+*.tmp
+*.log

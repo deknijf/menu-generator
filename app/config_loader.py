@@ -10,15 +10,18 @@ DEFAULT_SETTINGS = {
         "base_servings": 2,
         "time_zone": "UTC",
     },
+    # Fail-closed defaults: never ship a working account in source control.
+    # An empty password is rejected by verify_local_password, so a deployment
+    # without config/settings.json has no usable login until one is configured.
     "auth": {
-        "admin_email": "bert.deknijf@gmail.com",
-        "allowed_emails": ["bert.deknijf@gmail.com"],
-        "allow_dev_login": True,
+        "admin_email": "admin@example.com",
+        "allowed_emails": [],
+        "allow_dev_login": False,
         "local_users": [
             {
-                "email": "bert.deknijf@gmail.com",
-                "name": "Bert",
-                "password": "REDACTED-PASSWORD",
+                "email": "admin@example.com",
+                "name": "Admin",
+                "password": "",
             }
         ],
     },
