@@ -1,6 +1,6 @@
 services:
   menu-generator:
-    image: deknijf/menu-generator:v0.3.0
+    image: deknijf/menu-generator:v0.4.0
     container_name: menu-generator
     restart: unless-stopped
     ports:
