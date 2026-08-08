@@ -6,6 +6,7 @@ Deze map bevat een `systemd` unit voor productie op Debian, met Docker Compose.
 
 - `meal-planner.service`: systemd service om de compose stack automatisch te starten bij boot.
 - `menu.example.com.conf`: Nginx vhost (reverse proxy) voor `menu.example.com`.
+- `meal-planner-backup.sh`: dagelijkse backup van database en config.
 
 ## Verwachte paden op server
 
@@ -61,6 +62,54 @@ sudo systemctl stop meal-planner.service
 - Docker engine geïnstalleerd.
 - Docker Compose plugin beschikbaar via `docker compose`.
 - Gebruiker `admin` heeft toegang tot Docker (typisch via de `docker` group).
+
+## Backups
+
+De SQLite database bevat alles waar de app om draait: aankoopgeschiedenis, eigen
+recepten en planningen. Eén bestand, dus zonder backup is één schijffout definitief
+verlies.
+
+1. Kopieer het script en maak het uitvoerbaar:
+
+```bash
+cp /home/admin/meal-planner/server_config/meal-planner-backup.sh /home/admin/meal-planner-backup.sh
+chmod +x /home/admin/meal-planner-backup.sh
+```
+
+2. Draai het één keer met de hand om te controleren:
+
+```bash
+/home/admin/meal-planner-backup.sh
+```
+
+3. Zet het in cron (dagelijks om 03:15):
+
+```bash
+crontab -e
+# 15 3 * * * /home/admin/meal-planner-backup.sh >> /home/admin/meal-planner-backups/backup.log 2>&1
+```
+
+Backups komen in `/home/admin/meal-planner-backups/` en worden 30 dagen bewaard.
+Het script gebruikt de sqlite3 backup-API en niet `cp`, zodat de kopie consistent
+is terwijl de app doorschrijft.
+
+### Terugzetten
+
+```bash
+cd /home/admin/meal-planner
+sudo systemctl stop meal-planner
+gunzip -c /home/admin/meal-planner-backups/app.db.<stamp>.gz > data/app.db
+sudo systemctl start meal-planner
+```
+
+Controleer een backup zonder hem terug te zetten:
+
+```bash
+gunzip -c /home/admin/meal-planner-backups/app.db.<stamp>.gz > /tmp/check.db
+sqlite3 /tmp/check.db 'PRAGMA integrity_check;'
+sqlite3 /tmp/check.db 'SELECT COUNT(*) FROM shopping_history;'
+rm /tmp/check.db
+```
 
 ## Nginx reverse proxy
 
