@@ -11,10 +11,25 @@ Webapp voor weekmenu-planning met focus op:
 - 1 admin account (`admin@example.com`) + extra accounts via config
 - datumweergave in Europees formaat (`dd/mm/jjjj`)
 
+De app is een PWA: je kan ze op je smartphone aan het beginscherm toevoegen, en de
+boodschappenlijst blijft werken zonder mobiel bereik. Wat je offline afvinkt of
+verwijdert wordt bewaard en gesynchroniseerd zodra er weer verbinding is.
+
 ## Stack
 - Flask + SQLite
-- Frontend: HTML/CSS/JS
+- Frontend: HTML/CSS/JS, service worker voor offline gebruik
 - Docker + docker-compose
+
+## Tests
+```bash
+pip install -r requirements-dev.txt
+playwright install chromium --only-shell   # eenmalig, voor de smoke test
+
+pytest -m "not live"                       # unit tests, geen server nodig
+MP_URL=http://localhost:8000 MP_EMAIL=... MP_PASS=... pytest -m live
+```
+De smoke test is read-only en kan dus ook tegen productie draaien. Credentials gaan
+uitsluitend via environment variables.
 
 ## Configuratie
 Gebruik `config/settings.json.example` als startpunt en maak lokaal `config/settings.json` aan (staat in `.gitignore`).
