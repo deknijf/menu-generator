@@ -53,3 +53,14 @@ jobs:
             tail -60 pytest-output.txt 2>/dev/null || echo "geen output vastgelegd"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # De samenvatting is niet zonder inloggen op te vragen, annotaties wel.
+      # Bij een rode build staat de reden daardoor altijd in de check-run.
+      - name: Report failure as annotation
+        if: failure()
+        run: |
+          MSG=$(tail -40 pytest-output.txt 2>/dev/null || echo "geen pytest-output vastgelegd")
+          MSG="${MSG//'%'/'%25'}"
+          MSG="${MSG//$'\n'/'%0A'}"
+          MSG="${MSG//$'\r'/'%0D'}"
+          echo "::error title=pytest::$MSG"
