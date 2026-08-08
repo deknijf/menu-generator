@@ -2,10 +2,10 @@
 <html lang="nl">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Meal Planner - Login</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
-  <link rel="stylesheet" href="/static/styles.css?v=20260208v" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260808v2" />
 </head>
 <body class="login-page">
   <main class="login-shell">
@@ -28,10 +28,10 @@
         <button class="btn btn-primary btn-block" type="submit">Inloggen</button>
       </form>
 
-      {% if dev_login %}
+      {% if dev_login and dev_login_email %}
         <div class="dev-box">
           <p class="muted">Snel testen zonder wachtwoord:</p>
-          <a class="btn" href="/auth/dev?email=bert.deknijf@gmail.com">Login als admin testaccount</a>
+          <a class="btn" href="/auth/dev?email={{ dev_login_email | urlencode }}">Login als admin testaccount</a>
         </div>
       {% endif %}
     </section>

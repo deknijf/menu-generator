@@ -22,6 +22,7 @@ const state = {
   availableGroups: [],
   manageableGroups: [],
   manageableAccounts: [],
+  adminAiConfig: null,
 };
 const sidebarStorageKey = "sidebar_collapsed";
 const activeTabStorageKey = "active_tab";
@@ -218,6 +219,24 @@ function ingredientHaystack(item) {
   return chunks.join(" ");
 }
 
+function setButtonBusy(button, busy, busyLabel = "Bezig...") {
+  if (!button) return;
+  if (!button.dataset.defaultLabel) {
+    button.dataset.defaultLabel = button.textContent || "";
+  }
+  button.disabled = !!busy;
+  button.textContent = busy ? busyLabel : button.dataset.defaultLabel;
+}
+
+async function readApiError(res, fallback) {
+  try {
+    const data = await res.json();
+    return data?.error || fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+
 function bindImageFallback(img, item) {
   img.addEventListener("error", () => {
     if (img.dataset.fallbackApplied === "1") return;
@@ -334,6 +353,138 @@ function isAiGeneratedMeal(item) {
   return !id.startsWith("custom_");
 }
 
+/* --- Offline ondersteuning ---
+ *
+ * De boodschappenlijst wordt in de winkel gebruikt, waar het bereik regelmatig
+ * wegvalt. De service worker zorgt dat de lijst dan nog laadt; deze wachtrij zorgt
+ * dat afvinken en verwijderen ook doorgaan. Mutaties die het netwerk niet halen,
+ * gaan naar localStorage en worden opnieuw gespeeld zodra de verbinding terug is.
+ */
+
+const offlineQueueKey = "shopping_pending_mutations";
+
+function readOfflineQueue() {
+  try {
+    const raw = window.localStorage.getItem(offlineQueueKey);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function writeOfflineQueue(queue) {
+  try {
+    window.localStorage.setItem(offlineQueueKey, JSON.stringify(queue));
+  } catch (err) {
+    /* localStorage vol of geblokkeerd: dan gaat de mutatie verloren, niet de app. */
+  }
+  updateOfflineBanner();
+}
+
+function queueMutation(mutation) {
+  const queue = readOfflineQueue();
+  queue.push({ ...mutation, queued_at: Date.now() });
+  writeOfflineQueue(queue);
+}
+
+/* Voert een mutatie uit; zet hem in de wachtrij als het netwerk niet bereikbaar is.
+ * Geeft {ok, offline, data} terug zodat de caller optimistisch kan renderen. */
+async function mutateWithQueue(url, options) {
+  try {
+    const res = await fetch(url, options);
+    if (!res.ok) return { ok: false, offline: false };
+    const data = await res.json().catch(() => ({}));
+    return { ok: true, offline: false, data };
+  } catch (err) {
+    // Alleen een echte netwerkfout belandt hier; HTTP-fouten hebben res.ok === false.
+    queueMutation({ url, method: options?.method || "GET", body: options?.body || null });
+    return { ok: false, offline: true };
+  }
+}
+
+let flushingQueue = false;
+
+async function flushOfflineQueue() {
+  if (flushingQueue || !navigator.onLine) return;
+  const queue = readOfflineQueue();
+  if (!queue.length) return;
+
+  flushingQueue = true;
+  const overgebleven = [];
+  for (const mutation of queue) {
+    try {
+      const res = await fetch(mutation.url, {
+        method: mutation.method,
+        headers: mutation.body ? { "Content-Type": "application/json" } : undefined,
+        body: mutation.body || undefined,
+      });
+      // 4xx betekent dat de mutatie niet meer geldig is (item al weg); die laten
+      // we vallen in plaats van eindeloos opnieuw te proberen.
+      if (!res.ok && res.status >= 500) overgebleven.push(mutation);
+    } catch (err) {
+      overgebleven.push(mutation);
+    }
+  }
+  writeOfflineQueue(overgebleven);
+  flushingQueue = false;
+
+  if (!overgebleven.length) {
+    await loadShoppingList();
+  }
+}
+
+function updateOfflineBanner() {
+  const banner = document.getElementById("offline-banner");
+  if (!banner) return;
+  const wachtend = readOfflineQueue().length;
+  const offline = !navigator.onLine;
+
+  if (!offline && !wachtend) {
+    banner.hidden = true;
+    return;
+  }
+  banner.hidden = false;
+  if (offline && wachtend) {
+    banner.textContent = `Offline. ${wachtend} wijziging${wachtend === 1 ? "" : "en"} wacht op verbinding.`;
+  } else if (offline) {
+    banner.textContent = "Offline. Je ziet de laatst bekende lijst; wijzigingen worden bewaard.";
+  } else {
+    banner.textContent = `${wachtend} wijziging${wachtend === 1 ? "" : "en"} wordt gesynchroniseerd...`;
+  }
+}
+
+function initOfflineSupport() {
+  updateOfflineBanner();
+  window.addEventListener("online", () => {
+    updateOfflineBanner();
+    flushOfflineQueue();
+  });
+  window.addEventListener("offline", updateOfflineBanner);
+  flushOfflineQueue();
+
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {
+        /* Zonder service worker werkt de app gewoon online. */
+      });
+    });
+  }
+
+  // Bij uitloggen de caches leegmaken, zodat er geen data achterblijft.
+  const logout = document.querySelector('a[href="/logout"], #logout-btn');
+  if (logout) {
+    logout.addEventListener("click", () => {
+      try {
+        window.localStorage.removeItem(offlineQueueKey);
+        navigator.serviceWorker?.controller?.postMessage("clear-caches");
+      } catch (err) {
+        /* niet blokkerend */
+      }
+    });
+  }
+}
+
 function normalizeShoppingItems(rawItems) {
   return (rawItems || []).map((item, index) => ({
     id: Number(item.id || 0),
@@ -412,6 +563,25 @@ function bindTabs() {
 function activateTab(name) {
   const tab = document.querySelector(`.tab[data-tab="${name}"]`);
   if (tab) tab.click();
+}
+
+function isDesktopViewport() {
+  return window.matchMedia("(min-width: 761px)").matches;
+}
+
+function refreshAdminTabVisibility() {
+  const adminTab = document.getElementById("sidebar-admin-tab");
+  if (!adminTab) return;
+  const visible = state.isPrimaryAdmin && isDesktopViewport();
+  adminTab.hidden = !visible;
+  if (!visible) {
+    const savedTab = localStorage.getItem(activeTabStorageKey);
+    const adminPanel = document.getElementById("tab-admin");
+    if (savedTab === "admin") localStorage.setItem(activeTabStorageKey, "dashboard");
+    if (adminPanel && adminPanel.classList.contains("active")) {
+      activateTab("dashboard");
+    }
+  }
 }
 
 function setSidebarCollapsed(collapsed) {
@@ -508,6 +678,7 @@ async function fetchProfileSettings() {
   state.canManageGroups = Boolean(data.profile?.can_manage_groups) || Boolean(state.user?.is_admin);
   state.adminGroupIds = (data.profile?.group_ids || []).map((value) => Number(value));
   state.availableGroups = data.profile?.available_groups || [];
+  refreshAdminTabVisibility();
   renderAdminGroupMemberships();
   const accountPanel = document.getElementById("profile-account-management");
   if (accountPanel) accountPanel.hidden = !state.canManageGroupUsers;
@@ -533,6 +704,58 @@ async function fetchProfileSettings() {
   if (profileEmailEl) profileEmailEl.value = state.user?.email || "";
 
   updateProfileMenuModeOptions();
+}
+
+async function loadAdminAiSettings() {
+  const status = document.getElementById("admin-ai-status");
+  if (!state.isPrimaryAdmin) return;
+  const res = await fetch("/api/admin/ai");
+  if (!res.ok) {
+    if (status) status.textContent = "Admin instellingen laden mislukt.";
+    return;
+  }
+  const data = await res.json();
+  state.adminAiConfig = data;
+  const urlEl = document.getElementById("admin-ai-url");
+  const tokenEl = document.getElementById("admin-ai-token");
+  const modelEl = document.getElementById("admin-ai-model");
+  const promptEl = document.getElementById("admin-ai-prompt");
+  const allergiesEl = document.getElementById("admin-ai-allergies");
+  if (urlEl) urlEl.value = data.url || "";
+  if (tokenEl) tokenEl.value = data.api_token || "";
+  if (modelEl) modelEl.value = data.model || "";
+  if (promptEl) promptEl.value = data.prompt || "";
+  if (allergiesEl) allergiesEl.value = (data.blocked_allergies || []).join(", ");
+  if (status) status.textContent = "";
+}
+
+async function saveAdminAiSettings() {
+  if (!state.isPrimaryAdmin) return;
+  const status = document.getElementById("admin-ai-status");
+  const payload = {
+    url: (document.getElementById("admin-ai-url")?.value || "").trim(),
+    api_token: (document.getElementById("admin-ai-token")?.value || "").trim(),
+    model: (document.getElementById("admin-ai-model")?.value || "").trim(),
+    prompt: document.getElementById("admin-ai-prompt")?.value || "",
+    blocked_allergies: document.getElementById("admin-ai-allergies")?.value || "",
+  };
+  if (status) status.textContent = "";
+  const res = await fetch("/api/admin/ai", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (status) status.textContent = data.error || "Admin instellingen opslaan mislukt.";
+    return;
+  }
+  state.adminAiConfig = data;
+  await loadAdminAiSettings();
+  if (status) status.textContent = "Admin instellingen opgeslagen.";
+  setTimeout(() => {
+    if (status) status.textContent = "";
+  }, 2000);
 }
 
 async function updateOwnPassword(status) {
@@ -1652,16 +1875,25 @@ function renderShopping() {
     const deleteBtn = li.querySelector(".shop-delete-btn");
     checkbox.addEventListener("change", async () => {
       checkbox.disabled = true;
-      const res = await fetch(`/api/shopping-list/${encodeURIComponent(String(item.id))}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ checked: checkbox.checked }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        state.shopping = normalizeShoppingItems(data.items || []);
+      const gewenst = checkbox.checked;
+      const result = await mutateWithQueue(
+        `/api/shopping-list/${encodeURIComponent(String(item.id))}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ checked: gewenst }),
+        }
+      );
+
+      if (result.ok) {
+        state.shopping = normalizeShoppingItems(result.data.items || []);
+      } else if (result.offline) {
+        // Netwerk weg: de wijziging staat in de wachtrij, dus de lijst mag hem
+        // meteen tonen. Zonder dit lijkt afvinken in de winkel te mislukken.
+        const doel = state.shopping.find((entry) => entry.id === item.id);
+        if (doel) doel.checked = gewenst;
       } else {
-        checkbox.checked = !checkbox.checked;
+        checkbox.checked = !gewenst;
       }
       renderShopping();
     });
@@ -1669,15 +1901,19 @@ function renderShopping() {
     if (deleteBtn) {
       deleteBtn.addEventListener("click", async () => {
         deleteBtn.disabled = true;
-        const res = await fetch(`/api/shopping-list/${encodeURIComponent(String(item.id))}`, {
-          method: "DELETE",
-        });
-        if (!res.ok) {
+        const result = await mutateWithQueue(
+          `/api/shopping-list/${encodeURIComponent(String(item.id))}`,
+          { method: "DELETE" }
+        );
+
+        if (result.ok) {
+          state.shopping = normalizeShoppingItems(result.data.items || []);
+        } else if (result.offline) {
+          state.shopping = state.shopping.filter((entry) => entry.id !== item.id);
+        } else {
           deleteBtn.disabled = false;
           return;
         }
-        const data = await res.json();
-        state.shopping = normalizeShoppingItems(data.items || []);
         renderShopping();
       });
     }
@@ -1805,30 +2041,46 @@ async function generateMeals() {
     end: document.getElementById("end-date").value,
     options: getMealOptions(),
   };
+  const plannerButton = document.getElementById("generate-btn");
+  const heroButton = document.getElementById("hero-generate-btn");
 
-  let res = await fetch("/api/generate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (res.status === 409) {
-    const prompt = await res.json();
-    const ok = window.confirm(prompt.error || "Er bestaat al een menu. Opnieuw genereren?");
-    if (!ok) return;
-    res = await fetch("/api/generate", {
+  try {
+    setButtonBusy(plannerButton, true, "Genereren...");
+    setButtonBusy(heroButton, true, "Genereren...");
+
+    let res = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...payload, force: true }),
+      body: JSON.stringify(payload),
     });
-  }
-  if (!res.ok) return;
-  const data = await res.json();
-  state.plan = data.plan || [];
-  state.shopping = [];
+    if (res.status === 409) {
+      const prompt = await res.json();
+      const ok = window.confirm(prompt.error || "Er bestaat al een menu. Opnieuw genereren?");
+      if (!ok) return;
+      res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...payload, force: true }),
+      });
+    }
+    if (!res.ok) {
+      window.alert(await readApiError(res, "Genereren van maaltijden is mislukt."));
+      return;
+    }
+    const data = await res.json();
+    state.plan = data.plan || [];
+    state.shopping = [];
 
-  renderPlan();
-  renderShopping();
-  await loadCalendar();
+    renderPlan();
+    renderShopping();
+    await loadCalendar();
+  } catch (error) {
+    console.error(error);
+    window.alert("Genereren van maaltijden is mislukt. Controleer de verbinding en probeer opnieuw.");
+  } finally {
+    setButtonBusy(plannerButton, false);
+    setButtonBusy(heroButton, false);
+  }
 }
 
 async function generateShoppingList() {
@@ -1892,7 +2144,18 @@ function addExtraShoppingItem() {
   });
 }
 
+/* Voert één opstartstap uit en laat een fout de rest niet blokkeren. */
+async function bootStep(label, fn) {
+  try {
+    await fn();
+  } catch (err) {
+    console.warn(`Opstartstap "${label}" mislukt:`, err);
+    updateOfflineBanner();
+  }
+}
+
 async function boot() {
+  initOfflineSupport();
   initSidebarToggle();
   initCustomMealUpload();
   initProfileChipField("allergies");
@@ -1904,12 +2167,18 @@ async function boot() {
     activateTab(savedTab);
   }
   setDefaultDates();
-  await fetchSession();
-  await fetchProfileSettings();
-  await loadCustomMeals();
-  await loadCalendar();
-  await loadHistoryCalendar();
-  await loadShoppingList();
+
+  // Elke stap apart afgeschermd. Offline in de winkel faalt onvermijdelijk een
+  // deel van deze calls, en zonder deze afscherming brak de eerste fout de rest
+  // van het opstarten af: dan bleef juist de boodschappenlijst leeg.
+  // De lijst staat daarom ook vooraan; dat is wat je in de winkel nodig hebt.
+  await bootStep("session", fetchSession);
+  await bootStep("boodschappenlijst", loadShoppingList);
+  await bootStep("profiel", fetchProfileSettings);
+  await bootStep("eigen maaltijden", loadCustomMeals);
+  await bootStep("kalender", loadCalendar);
+  await bootStep("geschiedenis", loadHistoryCalendar);
+  await bootStep("admin AI", loadAdminAiSettings);
 
   document.getElementById("start-date").addEventListener("change", async () => {
     updateRangePreview();
@@ -1932,6 +2201,7 @@ async function boot() {
   document.getElementById("profile-create-account-btn").addEventListener("click", createManagedAccount);
   document.getElementById("profile-create-group-btn").addEventListener("click", createManagedGroup);
   document.getElementById("profile-rename-group-btn").addEventListener("click", renameManagedGroup);
+  document.getElementById("admin-ai-save-btn").addEventListener("click", saveAdminAiSettings);
   document.getElementById("profile-menu-mode").addEventListener("change", updateProfilePreferencesHint);
   document.getElementById("cm-save-btn").addEventListener("click", createCustomMeal);
   document.getElementById("cm-delete-btn").addEventListener("click", deleteSelectedCustomMeals);
@@ -1962,6 +2232,7 @@ async function boot() {
       addExtraShoppingItem();
     }
   });
+  window.addEventListener("resize", refreshAdminTabVisibility);
 }
 
 boot();

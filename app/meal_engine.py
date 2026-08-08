@@ -127,24 +127,110 @@ def _is_pasta_like(recipe):
     return "pasta" in name or "spaghetti" in name
 
 
+def _primary_protein_key(recipe):
+    tags = {str(tag or "").strip().lower() for tag in recipe.get("tags", [])}
+    text_parts = [str(recipe.get("name", "")).lower(), str(recipe.get("description", "")).lower(), " ".join(tags)]
+    for ingredient in recipe.get("ingredients", []):
+        text_parts.append(str(ingredient.get("name", "")).lower())
+    text = " ".join(part for part in text_parts if part)
+
+    protein_markers = [
+        ("fish", ["fish", "vis", "zalm", "kabeljauw", "tonijn", "salmon", "cod", "tuna"]),
+        ("chicken", ["kip", "chicken", "kalkoen", "turkey"]),
+        ("beef", ["rund", "beef", "gehakt", "steak", "hamburger", "bolognese"]),
+        ("pork", ["varken", "pork", "ham", "spek", "bacon", "worst", "sausage"]),
+        ("shellfish", ["garnaal", "garnalen", "shrimp", "prawn", "scampi"]),
+        ("legume", ["linzen", "lentil", "kikkererwt", "chickpea", "bonen", "beans"]),
+        ("egg", ["ei", "egg", "omelet", "frittata"]),
+        ("cheese", ["kaas", "cheese", "halloumi", "mozzarella", "feta"]),
+    ]
+    for key, markers in protein_markers:
+        if key in tags or any(marker in text for marker in markers):
+            return key
+    return "other"
+
+
+def _starch_key(recipe):
+    tags = {str(tag or "").strip().lower() for tag in recipe.get("tags", [])}
+    text_parts = [str(recipe.get("name", "")).lower(), str(recipe.get("description", "")).lower(), " ".join(tags)]
+    for ingredient in recipe.get("ingredients", []):
+        text_parts.append(str(ingredient.get("name", "")).lower())
+    text = " ".join(part for part in text_parts if part)
+
+    starch_markers = [
+        ("pasta", ["pasta", "spaghetti", "tagliatelle", "penne", "fusilli", "lasagne"]),
+        ("rice", ["rijst", "rice", "risotto"]),
+        ("potato", ["aardappel", "aardappelen", "krieltjes", "patat", "potato"]),
+        ("bread", ["brood", "wrap", "toast", "baguette"]),
+        ("grain", ["quinoa", "couscous", "bulgur"]),
+    ]
+    for key, markers in starch_markers:
+        if key in tags or any(marker in text for marker in markers):
+            return key
+    return "none"
+
+
+def _variety_penalty(recipe, recent_recipes):
+    if not recent_recipes:
+        return 0.0
+
+    penalty = 0.0
+    recipe_id = str(recipe.get("id", "")).strip()
+    recent_ids = [str(item.get("id", "")).strip() for item in recent_recipes]
+    if recipe_id:
+        for steps_ago, recent_id in enumerate(reversed(recent_ids), start=1):
+            if recipe_id != recent_id:
+                continue
+            if steps_ago == 1:
+                penalty += 12.0
+            elif steps_ago == 2:
+                penalty += 9.0
+            elif steps_ago <= 4:
+                penalty += 6.5
+            else:
+                penalty += 4.0
+
+    protein = _primary_protein_key(recipe)
+    recent_proteins = [_primary_protein_key(item) for item in recent_recipes]
+    if recent_proteins:
+        if protein == recent_proteins[-1]:
+            penalty += 4.2
+        if len(recent_proteins) >= 2 and protein == recent_proteins[-2]:
+            penalty += 2.1
+        penalty += recent_proteins.count(protein) * 1.35
+
+    starch = _starch_key(recipe)
+    recent_starches = [_starch_key(item) for item in recent_recipes if _starch_key(item) != "none"]
+    if starch != "none" and recent_starches:
+        if starch == recent_starches[-1]:
+            penalty += 2.35
+        if len(recent_starches) >= 2 and starch == recent_starches[-2]:
+            penalty += 1.1
+        penalty += recent_starches.count(starch) * 0.85
+
+    if recent_recipes:
+        last_recipe = recent_recipes[-1]
+        if _has_tag(last_recipe, "heavy") and _has_tag(recipe, "heavy"):
+            penalty += 1.3
+        if _has_tag(last_recipe, "fish") and _has_tag(recipe, "fish"):
+            penalty += 1.6
+
+    return penalty
+
+
 def _max_occurrences(recipe, day_count):
     rotation = (recipe.get("rotation_limit") or "").lower().strip()
-    rating = max(1, min(5, int(recipe.get("rating") or 3)))
     if not rotation:
         # Default diversity guardrails for meals without explicit rotation settings.
         recipe_id = str(recipe.get("id", ""))
         if recipe_id.startswith("ext_"):
             # External AI meals should be rotated aggressively to keep variety high.
-            base = max(1, int((day_count + 6) // 7))
-            return min(day_count, base + (1 if rating >= 4 else 0))
-        base = max(2, int((day_count + 3) // 4))
-        return min(day_count, base + max(0, rating - 3))
+            return min(day_count, max(1, int((day_count + 6) // 7)))
+        return min(day_count, max(1, int((day_count + 4) // 5)))
     if rotation == "2_per_week":
-        base = max(1, int((day_count * 2 + 6) // 7))
-        return min(day_count, base + (1 if rating >= 4 else 0))
+        return min(day_count, max(1, int((day_count * 2 + 6) // 7)))
     if rotation == "1_per_week":
-        base = max(1, int((day_count + 6) // 7))
-        return min(day_count, base + (1 if rating == 5 else 0))
+        return min(day_count, max(1, int((day_count + 6) // 7)))
     if rotation == "1_per_month":
         return max(1, int((day_count + 29) // 30))
     return None
@@ -257,6 +343,11 @@ def generate_plan(cook_days, settings, options, allergies_override=None, custom_
         if plan:
             prev_id = plan[-1]["meal_id"]
             prev_recipe = next((r for r in recipes if r["id"] == prev_id), None)
+        recent_recipes = []
+        for item in plan[-6:]:
+            recipe = next((r for r in recipes if r["id"] == item["meal_id"]), None)
+            if recipe is not None:
+                recent_recipes.append(recipe)
         remaining_days = len(cook_days) - day_idx
 
         # Occasionally inject a custom meal to diversify the week.
@@ -271,7 +362,7 @@ def generate_plan(cook_days, settings, options, allergies_override=None, custom_
                     continue
                 rating = max(1, min(5, int(recipe.get("rating") or 3)))
                 repeat_penalty = used.get(recipe["id"], 0) * max(1.15, 2.85 - (rating * 0.3))
-                score = _recipe_score(recipe, settings, options) - repeat_penalty + random.uniform(-0.3, 1.0)
+                score = _recipe_score(recipe, settings, options) - repeat_penalty - _variety_penalty(recipe, recent_recipes) + random.uniform(-0.3, 1.0)
                 if _has_tag(recipe, "heavy"):
                     score += 0.9 if _day_is_weekend(day) else -0.45
                 if score > best_custom_score:
@@ -291,7 +382,7 @@ def generate_plan(cook_days, settings, options, allergies_override=None, custom_
 
             rating = max(1, min(5, int(recipe.get("rating") or 3)))
             repeat_penalty = used.get(recipe["id"], 0) * max(1.2, 2.9 - (rating * 0.3))
-            score = _recipe_score(recipe, settings, options) - repeat_penalty + random.uniform(-0.6, 0.6)
+            score = _recipe_score(recipe, settings, options) - repeat_penalty - _variety_penalty(recipe, recent_recipes) + random.uniform(-0.6, 0.6)
 
             if _has_tag(recipe, "heavy"):
                 score += 0.9 if _day_is_weekend(day) else -0.45
@@ -346,6 +437,9 @@ def select_best_recipe(
     candidates = []
     base = list(load_recipes()) if include_base_recipes else []
     all_recipes = base + list(custom_recipes or [])
+    recipe_by_id = {str(recipe.get("id", "")).strip(): recipe for recipe in all_recipes}
+    recent_recipes = [recipe_by_id.get(str(rid or "").strip()) for rid in (recent_ids or [])]
+    recent_recipes = [recipe for recipe in recent_recipes if recipe is not None][-6:]
     day_count = max(7, len(all_recipes))
     for recipe in all_recipes:
         if recipe["id"] in excluded:
@@ -367,6 +461,7 @@ def select_best_recipe(
         rating = max(1, min(5, int(recipe.get("rating") or 3)))
         recent_penalty = max(0.65, 1.5 - (rating * 0.12))
         value -= recent_usage.get(recipe.get("id"), 0) * recent_penalty
+        value -= _variety_penalty(recipe, recent_recipes)
         if _has_tag(recipe, "heavy"):
             if day_iso and _day_is_weekend(day_iso):
                 value += 0.7

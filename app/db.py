@@ -207,6 +207,31 @@ def init_db():
         )
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS generated_ai_meals (
+            id TEXT PRIMARY KEY,
+            group_id INTEGER NOT NULL DEFAULT 1,
+            recipe_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    # Mislukte logins, voor de throttle. Staat in de DB en niet in het geheugen,
+    # omdat gunicorn met meerdere workers draait die geen state delen.
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS login_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            identifier TEXT NOT NULL,
+            attempted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_login_attempts ON login_attempts (identifier, attempted_at)"
+    )
     cur.execute("PRAGMA table_info(auth_users)")
     auth_columns = {row["name"] for row in cur.fetchall()}
     if "is_group_admin" not in auth_columns:
@@ -258,6 +283,7 @@ def init_db():
     cur.execute("UPDATE custom_meals SET group_id = 1 WHERE group_id IS NULL OR group_id <= 0")
     cur.execute("UPDATE shopping_items SET group_id = 1 WHERE group_id IS NULL OR group_id <= 0")
     cur.execute("UPDATE shopping_history SET group_id = 1 WHERE group_id IS NULL OR group_id <= 0")
+    cur.execute("UPDATE generated_ai_meals SET group_id = 1 WHERE group_id IS NULL OR group_id <= 0")
     cur.execute(
         """
         INSERT OR IGNORE INTO group_menu_preferences (group_id, menu_mode)
@@ -412,6 +438,67 @@ def verify_auth_password(email, password):
     if not check_password_hash(user.get("password_hash", ""), str(password or "")):
         return None
     return user
+
+
+# --- Login throttling ---
+#
+# De login staat op het open internet. Zonder rem is een zwak wachtwoord in een
+# middag te raden. We tellen mislukte pogingen per identifier (IP en e-mail) in
+# een tijdvenster en blokkeren daarna tijdelijk.
+
+LOGIN_MAX_ATTEMPTS = 8
+LOGIN_WINDOW_MINUTES = 15
+
+
+def record_failed_login(identifier):
+    token = str(identifier or "").strip().lower()
+    if not token:
+        return
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO login_attempts (identifier) VALUES (?)", (token,))
+    # Opruimen zodat de tabel niet onbeperkt groeit.
+    cur.execute(
+        "DELETE FROM login_attempts WHERE attempted_at < datetime('now', ?)",
+        (f"-{LOGIN_WINDOW_MINUTES * 4} minutes",),
+    )
+    conn.commit()
+    conn.close()
+
+
+def count_recent_failed_logins(identifier):
+    token = str(identifier or "").strip().lower()
+    if not token:
+        return 0
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT COUNT(*) AS aantal
+        FROM login_attempts
+        WHERE identifier = ? AND attempted_at >= datetime('now', ?)
+        """,
+        (token, f"-{LOGIN_WINDOW_MINUTES} minutes"),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return int((row["aantal"] if row else 0) or 0)
+
+
+def clear_failed_logins(identifier):
+    token = str(identifier or "").strip().lower()
+    if not token:
+        return
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM login_attempts WHERE identifier = ?", (token,))
+    conn.commit()
+    conn.close()
+
+
+def login_is_throttled(identifiers):
+    """True zodra één van de identifiers over de limiet zit."""
+    return any(count_recent_failed_logins(item) >= LOGIN_MAX_ATTEMPTS for item in identifiers if item)
 
 
 def list_auth_users(group_id=None):
@@ -569,6 +656,7 @@ def delete_group(group_id):
     cur.execute("DELETE FROM custom_meals WHERE group_id = ?", (gid,))
     cur.execute("DELETE FROM shopping_items WHERE group_id = ?", (gid,))
     cur.execute("DELETE FROM shopping_history WHERE group_id = ?", (gid,))
+    cur.execute("DELETE FROM generated_ai_meals WHERE group_id = ?", (gid,))
     cur.execute("DELETE FROM groups WHERE id = ?", (gid,))
     deleted = (cur.rowcount or 0) > 0
 
@@ -970,6 +1058,56 @@ def get_day(group_id, date_str):
     row = cur.fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def list_generated_ai_meals(group_id):
+    gid = int(group_id or 1)
+    if gid <= 0:
+        gid = 1
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, recipe_json
+        FROM generated_ai_meals
+        WHERE group_id = ?
+        ORDER BY updated_at DESC, created_at DESC
+        """,
+        (gid,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    out = []
+    for row in rows:
+        payload = _load_json_or_default(row["recipe_json"], {})
+        if isinstance(payload, dict) and payload.get("id"):
+            out.append(payload)
+    return out
+
+
+def upsert_generated_ai_meals(group_id, items):
+    gid = int(group_id or 1)
+    if gid <= 0:
+        gid = 1
+    conn = get_conn()
+    cur = conn.cursor()
+    for item in items or []:
+        meal_id = str((item or {}).get("id") or "").strip()
+        if not meal_id:
+            continue
+        cur.execute(
+            """
+            INSERT INTO generated_ai_meals (id, group_id, recipe_json)
+            VALUES (?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                group_id=excluded.group_id,
+                recipe_json=excluded.recipe_json,
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (meal_id, gid, json.dumps(item or {}, ensure_ascii=False)),
+        )
+    conn.commit()
+    conn.close()
 
 
 def get_user_allergies(email):

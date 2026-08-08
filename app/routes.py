@@ -16,11 +16,16 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
-from .external_recipes import get_external_ai_recipes
+from .admin_ai import get_admin_ai_config, get_ai_menu_recipes, save_admin_ai_config
+from .logging_setup import get_logger
 from .db import (
     add_shopping_item,
     clear_day_meals_between,
+    clear_failed_logins,
     clear_shopping_items,
+    count_recent_failed_logins,
+    login_is_throttled,
+    record_failed_login,
     complete_shopping_items,
     create_group,
     delete_group,
@@ -31,6 +36,7 @@ from .db import (
     group_exists,
     get_runtime_settings,
     list_auth_users,
+    list_generated_ai_meals,
     list_groups,
     create_custom_meal,
     delete_shopping_item,
@@ -65,12 +71,24 @@ from .db import (
     update_custom_meal,
     update_custom_meal_image,
     update_custom_meal_rating,
+    upsert_generated_ai_meals,
     upsert_user,
     upsert_auth_user,
     verify_auth_password,
     rename_group,
 )
 from .meal_engine import generate_plan, recipes_by_id, select_best_recipe
+
+logger = get_logger(__name__)
+
+
+def _client_ip():
+    """Het IP van de bezoeker.
+
+    ProxyFix in create_app() vertaalt de X-Forwarded-For header van nginx naar
+    remote_addr, dus dit klopt zowel achter de proxy als bij lokaal draaien.
+    """
+    return (request.remote_addr or "onbekend").strip().lower()
 
 
 def _require_auth():
@@ -242,6 +260,18 @@ def _normalize_menu_mode(value):
     return token if token in allowed else "ai_only"
 
 
+def _planner_ai_context(options, settings):
+    app_settings = (settings or {}).get("app", {}) if isinstance(settings, dict) else {}
+    base_servings = _parse_int(app_settings.get("base_servings", 2), default=2, min_value=1, max_value=8)
+    return {
+        "high_protein": bool((options or {}).get("high_protein")),
+        "low_carb": bool((options or {}).get("low_carb")),
+        "prefer_fish": bool((options or {}).get("prefer_fish")),
+        "person_count": _parse_int((options or {}).get("person_count", base_servings), default=base_servings, min_value=1, max_value=8),
+        "base_servings": base_servings,
+    }
+
+
 def _effective_menu_mode(user_email):
     gid = int((get_auth_user(user_email) or {}).get("group_id") or 1)
     requested = _normalize_menu_mode(get_group_menu_mode(gid))
@@ -260,23 +290,38 @@ def _custom_recipes_for_mode(user_email):
     return _custom_recipes_for_user(user_email)
 
 
-def _external_ai_recipes_for_mode(user_email):
+def _external_ai_recipes_for_mode(user_email, planner_context=None):
     mode, _ = _effective_menu_mode(user_email)
     if mode == "custom_only":
         return []
-    return get_external_ai_recipes(limit=16)
+    group_id = int((get_auth_user(user_email) or {}).get("group_id") or 1)
+    if planner_context:
+        recipes = get_ai_menu_recipes(limit=16, planner_context=planner_context)
+        if recipes:
+            upsert_generated_ai_meals(group_id, recipes)
+            return recipes
+    persisted = list_generated_ai_meals(group_id)
+    if persisted:
+        return persisted
+    recipes = get_ai_menu_recipes(limit=16)
+    if recipes:
+        upsert_generated_ai_meals(group_id, recipes)
+        return recipes
+    # Geen externe bron meer als vangnet: OpenRouter is de enige AI-bron. Leeg
+    # betekent hier dat de AI-config ontbreekt of faalt; de caller meldt dat.
+    return []
 
 
-def _extra_recipes_for_mode(user_email):
+def _extra_recipes_for_mode(user_email, planner_context=None):
     mode, _ = _effective_menu_mode(user_email)
     custom = [] if mode == "ai_only" else _custom_recipes_for_user(user_email)
-    external = [] if mode == "custom_only" else _external_ai_recipes_for_mode(user_email)
+    external = [] if mode == "custom_only" else _external_ai_recipes_for_mode(user_email, planner_context)
     return custom + external
 
 
 def _include_base_recipes_for_mode(user_email):
     mode, _ = _effective_menu_mode(user_email)
-    return mode != "custom_only"
+    return mode == "ai_and_custom"
 
 
 def _date_range(start, end):
@@ -406,10 +451,11 @@ def _normalize_unit(quantity, unit):
         return qty * 1000.0, "g"
     if any(marker in raw for marker in ("gram", "grams", "g")):
         return qty, "g"
-    if any(marker in raw for marker in ("liter", "litre", "liters", "litres", " l")) or raw == "l":
-        return qty * 1000.0, "ml"
+    # Check millilitres before litres: "liter" is a substring of "milliliter".
     if any(marker in raw for marker in ("milliliter", "millilitre", "ml")):
         return qty, "ml"
+    if any(marker in raw for marker in ("liter", "litre", "liters", "litres", " l")) or raw == "l":
+        return qty * 1000.0, "ml"
     if any(marker in raw for marker in ("clove", "cloves", "teen", "teentje", "teentjes")):
         return qty, "teentje"
     if any(marker in raw for marker in ("stuk", "stuks", "piece", "pieces", "pc", "pcs")):
@@ -699,7 +745,16 @@ def _custom_recipes_for_user(user_email):
 
 
 def _recipe_map_for_user(user_email):
-    combined = list(recipes_by_id().values()) + _custom_recipes_for_user(user_email) + get_external_ai_recipes(limit=24)
+    """Alle recepten die aan een maaltijd-id gekoppeld kunnen zijn.
+
+    Dit is een opzoektabel, geen kandidatenlijst: de basisrecepten zitten er altijd
+    in zodat oude plannen hun naam en ingredienten blijven vinden, ook als de
+    huidige menu_mode ze niet meer zou voorstellen.
+    """
+    group_id = int((get_auth_user(user_email) or {}).get("group_id") or 1)
+    persisted_ai = list_generated_ai_meals(group_id)
+    ai_recipes = persisted_ai or get_ai_menu_recipes(limit=24)
+    combined = list(recipes_by_id().values()) + _custom_recipes_for_user(user_email) + ai_recipes
     return {r["id"]: r for r in combined}
 
 
@@ -709,6 +764,27 @@ def register_routes(app):
         pictures_dir = _pictures_dir()
         pictures_dir.mkdir(parents=True, exist_ok=True)
         return send_from_directory(pictures_dir, filename)
+
+    @app.get("/sw.js")
+    def service_worker():
+        """De service worker moet vanaf de root geserveerd worden.
+
+        Een worker op /static/sw.js krijgt scope /static/ en kan de rest van de app
+        dan niet onderscheppen. Vandaar deze route plus de Service-Worker-Allowed
+        header. Geen caching, anders blijft een oude worker actief na een release.
+        """
+        static_dir = Path(app.static_folder)
+        response = send_from_directory(static_dir, "sw.js", mimetype="application/javascript")
+        response.headers["Service-Worker-Allowed"] = "/"
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        return response
+
+    @app.get("/manifest.webmanifest")
+    def web_manifest():
+        static_dir = Path(app.static_folder)
+        return send_from_directory(
+            static_dir, "manifest.webmanifest", mimetype="application/manifest+json"
+        )
 
     @app.get("/meal/<meal_id>")
     def meal_detail(meal_id):
@@ -793,6 +869,7 @@ def register_routes(app):
         return render_template(
             "login.html",
             dev_login=settings["auth"].get("allow_dev_login", False),
+            dev_login_email=settings["auth"].get("admin_email", ""),
             login_error=request.args.get("error", ""),
         )
 
@@ -805,12 +882,27 @@ def register_routes(app):
     def auth_login():
         email = request.form.get("email", "").strip().lower()
         password = request.form.get("password", "")
+        client_ip = _client_ip()
+        identifiers = [client_ip, f"email:{email}" if email else ""]
+
+        if login_is_throttled(identifiers):
+            logger.warning("Login geblokkeerd door throttle (ip=%s)", client_ip)
+            return redirect(
+                url_for("login", error="Te veel mislukte pogingen. Probeer het over 15 minuten opnieuw.")
+            )
+
         existing = get_auth_user(email)
-        if not existing:
-            return redirect(url_for("login", error="Onbekend account"))
-        user_cfg = verify_auth_password(email, password)
+        user_cfg = verify_auth_password(email, password) if existing else None
         if not user_cfg:
-            return redirect(url_for("login", error="Verkeerd wachtwoord"))
+            for item in identifiers:
+                record_failed_login(item)
+            logger.info("Mislukte login (ip=%s)", client_ip)
+            # Bewust dezelfde melding voor een onbekend account en een verkeerd
+            # wachtwoord, zodat de loginpagina niet verklapt welke adressen bestaan.
+            return redirect(url_for("login", error="E-mail of wachtwoord klopt niet"))
+
+        for item in identifiers:
+            clear_failed_logins(item)
         user = {
             "email": email,
             "name": user_cfg.get("name", email),
@@ -1158,6 +1250,39 @@ def register_routes(app):
             item["is_super_admin"] = str(item.get("email", "")).strip().lower() == super_admin
         return jsonify({"items": accounts})
 
+    @app.get("/api/admin/ai")
+    def api_admin_ai_get():
+        user = _require_auth()
+        settings = _runtime_settings(app)
+        if not _is_primary_admin(user, settings):
+            return jsonify({"error": "Niet toegestaan"}), 403
+        return jsonify(get_admin_ai_config())
+
+    @app.put("/api/admin/ai")
+    def api_admin_ai_put():
+        user = _require_auth()
+        settings = _runtime_settings(app)
+        if not _is_primary_admin(user, settings):
+            return jsonify({"error": "Niet toegestaan"}), 403
+        payload = request.get_json(force=True, silent=True) or {}
+        url = str(payload.get("url") or "").strip()
+        api_token = str(payload.get("api_token") or "").strip()
+        model = str(payload.get("model") or "").strip()
+        prompt = str(payload.get("prompt") or "").strip()
+        blocked_allergies = payload.get("blocked_allergies") or []
+        if isinstance(blocked_allergies, list):
+            blocked_allergies = ",".join(str(item or "").strip() for item in blocked_allergies)
+        blocked_allergies = str(blocked_allergies or "").strip()
+        if not url:
+            return jsonify({"error": "Integratie URL is verplicht."}), 400
+        if not api_token:
+            return jsonify({"error": "API token is verplicht."}), 400
+        if not model:
+            return jsonify({"error": "Model is verplicht."}), 400
+        if not prompt:
+            return jsonify({"error": "Prompt is verplicht."}), 400
+        return jsonify(save_admin_ai_config(url, api_token, model, prompt, blocked_allergies))
+
     @app.post("/api/accounts")
     def api_accounts_post():
         user = _require_auth()
@@ -1451,7 +1576,12 @@ def register_routes(app):
         current = get_day(user["group_id"], day) or {}
         current_meal_id = current.get("meal_id")
         user_settings = _settings_for_user(user["email"], _runtime_settings(app))
+        planner_context = _planner_ai_context(options, user_settings)
         effective_allergies = _effective_allergies(user["email"], user_settings)
+        extra_recipes = _extra_recipes_for_mode(user["email"], planner_context)
+        include_base_recipes = _include_base_recipes_for_mode(user["email"])
+        if not include_base_recipes and not extra_recipes:
+            return jsonify({"error": "Geen AI maaltijden beschikbaar. Controleer de Admin AI-configuratie of pas je planneropties aan."}), 400
         recipe_map = _recipe_map_for_user(user["email"])
         prev_day = get_day(user["group_id"], _shift_iso(day, -1)) or {}
         next_day = get_day(user["group_id"], _shift_iso(day, 1)) or {}
@@ -1470,8 +1600,8 @@ def register_routes(app):
             allergies_override=effective_allergies,
             excluded_ids=[current_meal_id] if current_meal_id else [],
             recent_ids=recent_ids,
-            custom_recipes=_extra_recipes_for_mode(user["email"]),
-            include_base_recipes=_include_base_recipes_for_mode(user["email"]),
+            custom_recipes=extra_recipes,
+            include_base_recipes=include_base_recipes,
         )
         if not recipe:
             return jsonify({"error": "Geen alternatief gerecht beschikbaar"}), 400
@@ -1637,7 +1767,12 @@ def register_routes(app):
 
         person_count = _parse_int(options.get("person_count"), default=2, min_value=1, max_value=8)
         user_settings = _settings_for_user(user["email"], _runtime_settings(app))
+        planner_context = _planner_ai_context(options, user_settings)
         effective_allergies = _effective_allergies(user["email"], user_settings)
+        extra_recipes = _extra_recipes_for_mode(user["email"], planner_context)
+        include_base_recipes = _include_base_recipes_for_mode(user["email"])
+        if not include_base_recipes and not extra_recipes:
+            return jsonify({"error": "Geen AI maaltijden beschikbaar. Controleer de Admin AI-configuratie of pas je planneropties aan."}), 400
 
         days = get_days_between(user["group_id"], start, end)
         cook_days = [d["day_date"] for d in days if d["cook"]]
@@ -1658,8 +1793,8 @@ def register_routes(app):
             user_settings,
             options,
             allergies_override=effective_allergies,
-            custom_recipes=_extra_recipes_for_mode(user["email"]),
-            include_base_recipes=_include_base_recipes_for_mode(user["email"]),
+            custom_recipes=extra_recipes,
+            include_base_recipes=include_base_recipes,
         )
 
         recipe_map = _recipe_map_for_user(user["email"])

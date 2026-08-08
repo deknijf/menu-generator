@@ -2,8 +2,14 @@ services:
   menu-generator:
     image: deknijf/menu-generator:v0.3.0
     container_name: menu-generator
+    restart: unless-stopped
     ports:
       - "8000:8000"
     volumes:
       - ./data:/app/data
       - ./config:/app/config
+      # De admin-UI schrijft de OpenRouter-configuratie naar /app/.env. Zonder
+      # deze mount staat dat bestand alleen in de container en is de API-key weg
+      # na elke `docker compose pull`. Het bestand moet op de host bestaan voordat
+      # de stack start, anders maakt Docker er een directory van.
+      - ./.env:/app/.env

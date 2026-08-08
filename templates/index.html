@@ -2,12 +2,18 @@
 <html lang="nl">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Meal Planner</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="theme-color" content="#26aebe" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Meal Planner" />
+  <link rel="apple-touch-icon" href="/static/icon-192.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="/static/styles.css?v=20260210v17" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260808v2" />
 </head>
 <body>
   <div class="app-layout">
@@ -67,6 +73,15 @@
         </button>
       </nav>
       <div class="sidebar-foot">
+        <button id="sidebar-admin-tab" class="tab side-item" data-tab="admin" type="button" hidden>
+          <span class="side-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path d="M12 3l7 4v5c0 5-3.3 8.5-7 9-3.7-.5-7-4-7-9V7l7-4z"/>
+              <path d="M9.5 12l1.8 1.8 3.7-4"/>
+            </svg>
+          </span>
+          <span class="side-label">Admin</span>
+        </button>
         <button id="sidebar-toggle" class="side-item side-toggle" type="button" aria-pressed="false">
           <span class="side-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none">
@@ -193,6 +208,7 @@
       </section>
 
       <section id="tab-shopping" class="tab-panel">
+        <p id="offline-banner" class="offline-banner" role="status" aria-live="polite" hidden></p>
         <section class="card">
           <div class="side-card-head">
             <h3>Boodschappenlijst</h3>
@@ -351,6 +367,40 @@
         </section>
       </section>
 
+      <section id="tab-admin" class="tab-panel">
+        <section class="card admin-card">
+          <div class="admin-head">
+            <div>
+              <h3>Admin</h3>
+              <p class="muted">Beheer de OpenRouter integratie voor AI-menu's. Deze bron wordt gebruikt zodra de groepsinstelling AI-maaltijden toelaat.</p>
+            </div>
+            <span class="admin-pill">Alleen super admin</span>
+          </div>
+
+          <div class="admin-form-grid">
+            <label for="admin-ai-url">Integratie URL</label>
+            <input id="admin-ai-url" type="url" placeholder="https://openrouter.ai/api/v1/chat/completions" />
+
+            <label for="admin-ai-token">API token</label>
+            <input id="admin-ai-token" type="password" placeholder="sk-or-..." />
+
+            <label for="admin-ai-model">Model</label>
+            <input id="admin-ai-model" type="text" placeholder="openai/gpt-4o-mini" />
+
+            <label for="admin-ai-prompt">Prompt voor AI menu-generatie</label>
+            <textarea id="admin-ai-prompt" rows="10" placeholder="Omschrijf welk type menu's de AI mag genereren."></textarea>
+
+            <label for="admin-ai-allergies">Geblokkeerde allergieën</label>
+            <textarea id="admin-ai-allergies" rows="4" placeholder="bv. peanut, shellfish&#10;Deze ingrediënten/allergenen mogen nooit in AI maaltijden zitten."></textarea>
+          </div>
+
+          <div class="button-row">
+            <button id="admin-ai-save-btn" class="btn btn-primary" type="button">Opslaan</button>
+            <span id="admin-ai-status" class="muted"></span>
+          </div>
+        </section>
+      </section>
+
       <section id="tab-profile" class="tab-panel">
         <section class="card">
           <h3>Profiel en voorkeuren</h3>
@@ -472,6 +522,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260210v42"></script>
+  <script src="/static/app.js?v=20260808v2"></script>
 </body>
 </html>
