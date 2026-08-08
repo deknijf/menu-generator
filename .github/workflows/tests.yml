@@ -24,7 +24,32 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
+      - name: Show environment
+        run: |
+          python --version
+          pip --version
+          python -c "import flask, dotenv, werkzeug; print('app deps ok')"
+          python -c "import pytest; print('pytest', pytest.__version__)"
+
       # De live smoke test vereist een draaiende app en credentials en wordt
       # daarom bewust overgeslagen; die draai je lokaal of tegen productie.
+      #
+      # De output gaat ook naar de run-samenvatting. Logs van Actions zijn niet
+      # zonder inloggen te lezen, en dan is een rood kruisje zonder reden niet
+      # te debuggen: de samenvatting is wel publiek opvraagbaar.
       - name: Run unit tests
-        run: pytest -m "not live"
+        id: pytest
+        run: |
+          set -o pipefail
+          pytest -m "not live" -v --tb=short 2>&1 | tee pytest-output.txt
+
+      - name: Publish results
+        if: always()
+        run: |
+          {
+            echo "## Testresultaten"
+            echo
+            echo '```'
+            tail -60 pytest-output.txt 2>/dev/null || echo "geen output vastgelegd"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
