@@ -670,12 +670,34 @@ def _has_generated_plan_between(group_id, start, end):
     return any(row.get("meal_id") for row in rows)
 
 
-def _week_bounds(day_iso):
-    day_date = datetime.strptime(day_iso, "%Y-%m-%d").date()
-    weekday = day_date.weekday()  # maandag=0
-    monday = day_date - timedelta(days=weekday)
-    sunday = monday + timedelta(days=6)
-    return monday.isoformat(), sunday.isoformat()
+def _geplande_maaltijden_rond(group_id, day_iso, marge_dagen=45):
+    """De maaltijden uit dezelfde aaneengesloten planning als deze dag.
+
+    Een planning is de reeks dagen die de datepicker heeft aangemaakt, en die
+    loopt niet netjes van maandag tot zondag. We lopen daarom vanaf deze dag naar
+    voor en naar achter zolang er een dag ingepland staat. Zo weet "Opnieuw" wat
+    er al op tafel komt en kan het geen gerecht kiezen dat er al staat.
+    """
+    dag = datetime.strptime(day_iso, "%Y-%m-%d").date()
+    van = (dag - timedelta(days=marge_dagen)).isoformat()
+    tot = (dag + timedelta(days=marge_dagen)).isoformat()
+    per_datum = {rij["day_date"]: rij for rij in get_days_between(group_id, van, tot)}
+
+    reeks = [day_iso] if day_iso in per_datum else []
+    for richting in (-1, 1):
+        stap = 1
+        while True:
+            datum = (dag + timedelta(days=richting * stap)).isoformat()
+            if datum not in per_datum:
+                break
+            reeks.append(datum)
+            stap += 1
+
+    return [
+        per_datum[datum]["meal_id"]
+        for datum in reeks
+        if datum != day_iso and per_datum[datum].get("meal_id")
+    ]
 
 
 def _meal_explanation(recipe, options, person_count):
@@ -1758,6 +1780,11 @@ def register_routes(app):
             recipe = _recipe_map_for_user(user["email"]).get(meal_id)
             if not recipe:
                 return jsonify({"error": "Onbekend gerecht"}), 404
+            # Een planning bevat geen twee dezelfde gerechten. De keuzelijst grijst
+            # ze al uit; deze controle houdt dat overeind als het verzoek elders
+            # vandaan komt.
+            if meal_id in _geplande_maaltijden_rond(user["group_id"], day):
+                return jsonify({"error": "Dit gerecht staat al in deze planning."}), 409
             # Zelf kiezen impliceert dat je die dag kookt.
             set_day_cook(user["group_id"], day, True)
             set_day_meal(user["group_id"], day, meal_id)
@@ -1786,9 +1813,11 @@ def register_routes(app):
         next_day = get_day(user["group_id"], _shift_iso(day, 1)) or {}
         prev_recipe = recipe_map.get(prev_day.get("meal_id")) if prev_day.get("meal_id") else None
         next_recipe = recipe_map.get(next_day.get("meal_id")) if next_day.get("meal_id") else None
-        week_start, week_end = _week_bounds(day)
-        week_rows = get_days_between(user["group_id"], week_start, week_end)
-        recent_ids = [row.get("meal_id") for row in week_rows if row.get("meal_id") and row.get("day_date") != day]
+        # Alles wat al in deze planning staat is uitgesloten, niet alleen het
+        # gerecht van vandaag: anders zet "Opnieuw" er iets neer dat verderop in
+        # de week al gepland is.
+        al_gepland = _geplande_maaltijden_rond(user["group_id"], day)
+        uitgesloten = list(dict.fromkeys([*al_gepland, *([current_meal_id] if current_meal_id else [])]))
 
         recipe = select_best_recipe(
             user_settings,
@@ -1797,13 +1826,16 @@ def register_routes(app):
             prev_recipe=prev_recipe,
             next_recipe=next_recipe,
             allergies_override=effective_allergies,
-            excluded_ids=[current_meal_id] if current_meal_id else [],
-            recent_ids=recent_ids,
+            excluded_ids=uitgesloten,
+            recent_ids=al_gepland,
             custom_recipes=extra_recipes,
             include_base_recipes=include_base_recipes,
         )
         if not recipe:
-            return jsonify({"error": "Geen alternatief gerecht beschikbaar"}), 400
+            return jsonify(
+                {"error": "Geen ander gerecht beschikbaar: al je passende recepten staan "
+                          "al in deze planning. Voeg er een toe of kies zelf een gerecht."}
+            ), 400
 
         set_day_meal(user["group_id"], day, recipe["id"])
         clear_shopping_items(user["email"])
@@ -2059,7 +2091,19 @@ def register_routes(app):
             )
 
         clear_shopping_items(user["email"])
-        return jsonify({"plan": enriched})
+
+        # Een planning bevat nooit twee dezelfde gerechten. Zijn er te weinig
+        # recepten voor de gevraagde periode, dan blijven er dagen leeg; dat
+        # zeggen we erbij in plaats van stil een gerecht te herhalen.
+        tekort = len(cook_days) - len(enriched)
+        antwoord = {"plan": enriched}
+        if tekort > 0:
+            antwoord["notice"] = (
+                f"{tekort} {'dag' if tekort == 1 else 'dagen'} bleef leeg: er zijn te weinig "
+                "verschillende gerechten voor deze periode. Voeg recepten toe of kies een "
+                "kortere periode."
+            )
+        return jsonify(antwoord)
 
     @app.get("/api/shopping-list")
     def api_shopping_list_get():

@@ -474,6 +474,8 @@ def generate_plan(
             best_custom = None
             best_custom_score = float("-inf")
             for recipe in custom_pool:
+                if used.get(recipe["id"]):
+                    continue
                 max_occ = _max_occurrences(recipe, len(cook_days))
                 if max_occ is not None and used.get(recipe["id"], 0) >= max_occ:
                     continue
@@ -498,6 +500,12 @@ def generate_plan(
                 best_score = best_custom_score
 
         for recipe in ranked:
+            # Eenzelfde gerecht komt maar een keer in een planning. Vroeger was
+            # dit alleen een aftrek in de score, waardoor je bij een kleine
+            # bibliotheek toch twee keer dezelfde week-in-week-uit zag staan.
+            if used.get(recipe["id"]):
+                continue
+
             max_occ = _max_occurrences(recipe, len(cook_days))
             if max_occ is not None and used.get(recipe["id"], 0) >= max_occ:
                 continue
@@ -532,6 +540,10 @@ def generate_plan(
                 best_score = score
 
         if best is None:
+            # Alles is al gekozen: de bibliotheek is kleiner dan de periode. Die
+            # dag blijft leeg. Een herhaling zou de belofte breken dat een
+            # planning geen twee dezelfde gerechten bevat; de route meldt hoeveel
+            # dagen er niet ingevuld raakten.
             continue
 
         plan.append({"date": day, "meal_id": best["id"], "meal_name": best["name"]})

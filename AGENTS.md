@@ -226,6 +226,18 @@ Opties: `high_protein`, `low_carb`, `prefer_fish`, `person_count` (1–8).
   `1_per_month` of `1_per_2_months`. De periodes staan in `ROTATION_PERIOD_DAYS`.
 - `_is_allowed()` — harde filter op allergieën. Nooit omzeilen.
 - `_filter_afkeer()` — haalt eruit wat de groep niet lust, op een enkele uitzondering na.
+
+### Eén gerecht komt maar één keer in een planning
+
+Een harde regel, geen scoring. `generate_plan()` slaat elk gerecht over dat al gekozen
+is. "Opnieuw" krijgt via `_geplande_maaltijden_rond()` de hele aaneengesloten reeks
+dagen als `excluded_ids`, niet alleen de dag zelf — een planning loopt zelden netjes van
+maandag tot zondag, dus de kalenderweek is niet de eenheid. De keuzelijst van "Kies zelf"
+grijst uit wat al gepland staat, en `PUT /api/calendar/<day>` weigert het met 409.
+
+Zijn er te weinig verschillende gerechten voor de gevraagde periode, dan blijven er dagen
+**leeg**. Dat is bewust: de belofte "geen twee dezelfde" weegt zwaarder dan een volle
+week. De genereer-route zet dan een `notice` in het antwoord en de frontend toont die.
 - Een random-component zorgt dat twee generaties niet identiek zijn. Tests moeten daar
   rekening mee houden (seed of assert op eigenschappen, niet op exacte output).
 

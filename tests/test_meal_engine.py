@@ -411,3 +411,59 @@ def test_afkeer_uit_de_settings_wordt_gebruikt(settings, make_recipe, week, opti
 
     assert plan
     assert all(dag["meal_id"] != "zwam" for dag in plan)
+
+
+# --- Geen twee dezelfde gerechten in een planning ---
+
+
+def test_planning_bevat_nooit_twee_dezelfde_gerechten(settings, options, make_recipe, week):
+    """Vroeger was herhaling enkel een aftrek in de score, geen harde regel."""
+    from app.meal_engine import generate_plan
+
+    recepten = [make_recipe(f"r{i}", f"Gerecht {i}") for i in range(10)]
+    for _ in range(25):
+        plan = generate_plan(week, settings, options, custom_recipes=recepten,
+                             include_base_recipes=False)
+        ids = [item["meal_id"] for item in plan]
+        assert len(ids) == len(set(ids)), ids
+
+
+def test_te_kleine_bibliotheek_laat_dagen_leeg_in_plaats_van_te_herhalen(settings, options, make_recipe, week):
+    """Drie gerechten voor zeven dagen geeft drie dagen, geen herhalingen."""
+    from app.meal_engine import generate_plan
+
+    recepten = [make_recipe(f"r{i}", f"Gerecht {i}") for i in range(3)]
+    plan = generate_plan(week, settings, options, custom_recipes=recepten,
+                         include_base_recipes=False)
+
+    assert len(plan) == 3
+    assert len({item["meal_id"] for item in plan}) == 3
+
+
+def test_opnieuw_kiest_nooit_iets_dat_al_gepland_staat(settings, options, make_recipe):
+    """select_best_recipe krijgt de hele planning als uitgesloten mee."""
+    from app.meal_engine import select_best_recipe
+
+    recepten = [make_recipe(f"r{i}", f"Gerecht {i}") for i in range(6)]
+    al_gepland = ["r0", "r1", "r2", "r3"]
+    for _ in range(20):
+        keuze = select_best_recipe(
+            settings, options, day_iso="2026-08-05",
+            excluded_ids=al_gepland, recent_ids=al_gepland,
+            custom_recipes=recepten, include_base_recipes=False,
+        )
+        assert keuze is not None
+        assert keuze["id"] not in al_gepland
+
+
+def test_opnieuw_geeft_niets_als_alles_al_gepland_staat(settings, options, make_recipe):
+    """Beter geen alternatief dan een dubbel gerecht; de route meldt dat."""
+    from app.meal_engine import select_best_recipe
+
+    recepten = [make_recipe(f"r{i}") for i in range(3)]
+    keuze = select_best_recipe(
+        settings, options, day_iso="2026-08-05",
+        excluded_ids=["r0", "r1", "r2"], recent_ids=["r0", "r1", "r2"],
+        custom_recipes=recepten, include_base_recipes=False,
+    )
+    assert keuze is None

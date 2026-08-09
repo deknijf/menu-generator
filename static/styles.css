@@ -3523,6 +3523,16 @@ a.history-day-meal:hover {
   background: #f2fbf8;
 }
 
+/* Staat al elders in deze planning: zichtbaar maar niet te kiezen. */
+.meal-picker-item.is-gepland {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.meal-picker-item.is-gepland:hover {
+  background: none;
+}
+
 .meal-picker-naam {
   font-weight: 700;
   color: #12433f;

@@ -1932,18 +1932,30 @@ function renderMealPickerList(zoekterm) {
     return;
   }
 
+  // Wat elders in deze planning staat kan je niet nog eens kiezen: een planning
+  // bevat geen twee dezelfde gerechten. We tonen ze wel, met de dag erbij, want
+  // "waar is mijn recept gebleven" is vervelender dan een uitgegrijsde regel.
+  const alGepland = new Map();
+  (state.days || []).forEach((dag) => {
+    if (dag.meal_id && dag.date !== mealPickerDate) alGepland.set(dag.meal_id, dag.date);
+  });
+
   lijst.innerHTML = treffers
     .slice(0, 60)
     .map((meal) => {
       const kcal = mealKcal(meal);
-      return `<li><button type="button" class="meal-picker-item" data-meal="${escapeHtml(meal.id)}">
+      const bezet = alGepland.get(meal.id);
+      const meta = bezet
+        ? `Staat al op ${formatDateEu(bezet)}`
+        : `${escapeHtml(courseLabels[meal.course] || courseLabels.hoofdgerecht)}${kcal ? ` &middot; ${Math.round(kcal)} kcal p.p.` : ""}`;
+      return `<li><button type="button" class="meal-picker-item${bezet ? " is-gepland" : ""}" data-meal="${escapeHtml(meal.id)}"${bezet ? " disabled" : ""}>
         <span class="meal-picker-naam">${escapeHtml(meal.name)}</span>
-        <span class="meal-picker-meta">${escapeHtml(courseLabels[meal.course] || courseLabels.hoofdgerecht)}${kcal ? ` &middot; ${Math.round(kcal)} kcal p.p.` : ""}</span>
+        <span class="meal-picker-meta">${meta}</span>
       </button></li>`;
     })
     .join("");
 
-  lijst.querySelectorAll(".meal-picker-item").forEach((knop) => {
+  lijst.querySelectorAll(".meal-picker-item:not([disabled])").forEach((knop) => {
     knop.addEventListener("click", () => kiesMaaltijd(knop.dataset.meal));
   });
 }
@@ -2324,6 +2336,9 @@ async function generateMeals() {
     renderPlan();
     renderShopping();
     await loadCalendar();
+    // Te weinig verschillende gerechten voor de periode: dan blijven er dagen
+    // leeg, want een planning herhaalt nooit hetzelfde gerecht.
+    if (data.notice) window.alert(data.notice);
   } catch (error) {
     console.error(error);
     window.alert("Genereren van maaltijden is mislukt. Controleer de verbinding en probeer opnieuw.");
