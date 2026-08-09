@@ -5,13 +5,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{ recipe.name }} · Meal Planner</title>
   <link rel="icon" type="image/x-icon" href="/static/favicon.ico" />
-  <link rel="stylesheet" href="/static/styles.css?v=20260808v2" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260809v2" />
+  <!-- Zonder defer: het inline script onderaan de body draait tijdens het parsen
+       en heeft RecipeView dan al nodig. -->
+  <script src="/static/recipe-view.js?v=20260809v2"></script>
 </head>
 <body class="detail-page">
   <main class="detail-shell">
     <header class="card detail-top">
       <a href="/" class="btn">Terug naar planner</a>
       <div class="detail-top-actions">
+        <span class="course-pill course-{{ recipe.course or 'hoofdgerecht' }}">{{ course_label }}</span>
+        {% if recipe.source_url %}
+          <a class="source-pill source-pill-link" href="{{ recipe.source_url }}"
+             target="_blank" rel="noopener noreferrer"
+             title="Bekijk het originele recept">{{ source_label }}</a>
+        {% else %}
+          <span class="source-pill">{{ source_label }}</span>
+        {% endif %}
         <button
           id="detail-edit-btn"
           class="btn btn-primary"
@@ -28,6 +39,7 @@
       data-meal-id="{{ meal_id }}"
       data-editable="{{ '1' if editable else '0' }}"
       data-rating="{{ recipe.rating or 3 }}"
+      data-servings="{{ servings }}"
     >
       <section class="card detail-hero">
         <div class="detail-media-column">
@@ -59,33 +71,64 @@
           <div class="detail-inline">
             <label>Tags (komma) <input id="f-tags" type="text" value="{{ (recipe.tags or [])|join(', ') }}" disabled /></label>
             <label>Allergenen (komma) <input id="f-allergens" type="text" value="{{ (recipe.allergens or [])|join(', ') }}" disabled /></label>
+            <label>Gang
+              <select id="f-course" disabled>
+                <option value="voorgerecht" {% if recipe.course == 'voorgerecht' %}selected{% endif %}>Voorgerecht</option>
+                <option value="hoofdgerecht" {% if recipe.course != 'voorgerecht' and recipe.course != 'dessert' %}selected{% endif %}>Hoofdgerecht</option>
+                <option value="dessert" {% if recipe.course == 'dessert' %}selected{% endif %}>Dessert</option>
+              </select>
+            </label>
             <label>Rotatiefrequentie
               <select id="f-rotation" disabled>
-                <option value="2_per_week" {% if recipe.rotation_limit == '2_per_week' %}selected{% endif %}>2 keer per week</option>
                 <option value="1_per_week" {% if recipe.rotation_limit == '1_per_week' %}selected{% endif %}>1 keer per week</option>
+                <option value="1_per_2_weeks" {% if recipe.rotation_limit == '1_per_2_weeks' %}selected{% endif %}>1 keer per 2 weken</option>
                 <option value="1_per_month" {% if recipe.rotation_limit == '1_per_month' %}selected{% endif %}>1 keer per maand</option>
+                <option value="1_per_2_months" {% if recipe.rotation_limit == '1_per_2_months' %}selected{% endif %}>1 keer per 2 maanden</option>
               </select>
             </label>
           </div>
           {% if date_label %}
             <p class="muted">Gepland op: {{ date_label }}</p>
           {% endif %}
-          <p class="muted">Voor {{ person_count }} personen</p>
           <span id="detail-save-status" class="muted"></span>
         </div>
       </section>
 
       <section class="detail-grid">
         <article class="card detail-card">
-          <h3>Ingredienten en details</h3>
-          <textarea id="f-ingredients" class="detail-textarea-rich" rows="12" disabled>{% for ing in recipe.ingredients or [] %}{{ ing.name }}, {{ ing.quantity }}, {{ ing.unit }}{% if not loop.last %}
+          <div class="detail-card-head">
+            <h3>Ingredienten</h3>
+            <div class="servings-block">
+              <span class="servings-caption">Voor</span>
+              <div id="detail-servings"></div>
+            </div>
+          </div>
+
+          <p id="servings-hint" class="muted servings-hint"></p>
+
+          <!-- Bekijken: nette tabel. Bewerken: platte tekst. -->
+          <div id="ingredients-view" class="ingredients-view"></div>
+          <label id="ingredients-edit" class="edit-only" hidden>
+            <span class="edit-help">1 ingredient per lijn: <code>naam, aantal, eenheid</code></span>
+            <textarea id="f-ingredients" class="detail-textarea-rich" rows="12" disabled>{% for ing in recipe.ingredients or [] %}{{ ing.name }}, {{ ing.quantity }}, {{ ing.unit }}{% if not loop.last %}
 {% endif %}{% endfor %}</textarea>
+          </label>
         </article>
 
         <article class="card detail-card">
           <h3>Bereidingswijze</h3>
-          <textarea id="f-preparation" class="detail-textarea-rich" rows="12" disabled>{% for step in steps %}{{ step }}{% if not loop.last %}
+
+          <div id="preparation-view" class="preparation-view"></div>
+          <label id="preparation-edit" class="edit-only" hidden>
+            <span class="edit-help">
+              Laat een <strong>lege regel</strong> tussen twee stappen; die worden automatisch
+              genummerd. Eigen titel met <code>## Titel</code>, opsomming met <code>-</code>,
+              nadruk met <code>**vet**</code>.
+            </span>
+            <textarea id="f-preparation" class="detail-textarea-rich" rows="14" disabled>{% for step in steps %}{{ step }}{% if not loop.last %}
+
 {% endif %}{% endfor %}</textarea>
+          </label>
         </article>
       </section>
     </form>
@@ -108,28 +151,45 @@
       let editing = false;
       let rating = Math.max(1, Math.min(5, Number(form.dataset.rating || 3)));
 
+      const RV = window.RecipeView;
+      const ingredientsInput = document.getElementById("f-ingredients");
+      const preparationInput = document.getElementById("f-preparation");
+      const ingredientsView = document.getElementById("ingredients-view");
+      const preparationView = document.getElementById("preparation-view");
+      const ingredientsEdit = document.getElementById("ingredients-edit");
+      const preparationEdit = document.getElementById("preparation-edit");
+      const servingsHint = document.getElementById("servings-hint");
+
+      // Porties waarvoor het recept genoteerd is, en waarvoor je nu wil koken.
+      const baseServings = RV.clampServings(form.dataset.servings, RV.DEFAULT_SERVINGS);
+      let viewServings = baseServings;
+
+      const stepper = RV.createServingsStepper({
+        value: baseServings,
+        onChange: (value) => {
+          viewServings = value;
+          renderReadOnly();
+        },
+      });
+      document.getElementById("detail-servings").appendChild(stepper.element);
+
       function splitCsv(value) {
         return (value || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
       }
 
-      function parseIngredients(text) {
-        return (text || "")
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean)
-          .map((line) => {
-            const parts = line.split(",").map((x) => x.trim());
-            return {
-              name: parts[0] || "",
-              quantity: Number(parts[1] || 0),
-              unit: parts[2] || "",
-            };
-          })
-          .filter((x) => x.name);
-      }
+      function renderReadOnly() {
+        const ingredients = RV.parseIngredients(ingredientsInput.value);
+        const scale = viewServings / baseServings;
+        ingredientsView.innerHTML = RV.renderIngredientsTable(ingredients, scale);
+        preparationView.innerHTML = RV.renderSteps(RV.parseSteps(preparationInput.value));
 
-      function splitLines(text) {
-        return (text || "").split("\n").map((x) => x.trim()).filter(Boolean);
+        if (viewServings === baseServings) {
+          servingsHint.textContent = `Hoeveelheden zoals genoteerd, voor ${baseServings} personen.`;
+        } else {
+          servingsHint.textContent =
+            `Omgerekend van ${baseServings} naar ${viewServings} ` +
+            `${viewServings === 1 ? "persoon" : "personen"}.`;
+        }
       }
 
       function setEditing(next) {
@@ -139,6 +199,20 @@
           if (field.id === "detail-photo-file") return;
           field.disabled = !editing;
         });
+
+        // In bewerkmodus schrijf je platte tekst, daarbuiten lees je de nette weergave.
+        ingredientsEdit.hidden = !editing;
+        preparationEdit.hidden = !editing;
+        ingredientsView.hidden = editing;
+        preparationView.hidden = editing;
+
+        if (editing) {
+          // Bij bewerken tonen we altijd de opgeslagen hoeveelheden, niet de omgerekende.
+          stepper.value = baseServings;
+        } else {
+          renderReadOnly();
+        }
+
         editBtn.textContent = editing ? "Save" : "Edit";
       }
 
@@ -234,9 +308,11 @@
           calories: Number(document.getElementById("f-calories").value || 0),
           tags: splitCsv(document.getElementById("f-tags").value),
           allergens: splitCsv(document.getElementById("f-allergens").value),
-          ingredients: parseIngredients(document.getElementById("f-ingredients").value),
-          preparation: splitLines(document.getElementById("f-preparation").value),
+          ingredients: RV.parseIngredients(ingredientsInput.value),
+          preparation: RV.parseSteps(preparationInput.value),
           rotation_limit: document.getElementById("f-rotation").value,
+          course: document.getElementById("f-course").value,
+          servings: stepper.value,
           rating,
         };
 
@@ -252,11 +328,12 @@
         }
 
         status.textContent = "Opgeslagen.";
-        setEditing(false);
-        setTimeout(() => { status.textContent = ""; }, 1500);
+        // Opnieuw laden zodat de omgerekende weergave vanaf de nieuwe porties vertrekt.
+        window.location.reload();
       });
 
       renderStars();
+      setEditing(false);
     })();
   </script>
 </body>

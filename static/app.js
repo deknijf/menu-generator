@@ -42,10 +42,20 @@ const mealImages = {
 
 const fallbackMealImage = "https://images.unsplash.com/photo-1498837167922-ddd27525d352?auto=format&fit=crop&w=600&q=80";
 const rotationLimitLabels = {
-  "2_per_week": "max 2x/week",
-  "1_per_week": "max 1x/week",
-  "1_per_month": "max 1x/maand",
+  "1_per_week": "max 1x per week",
+  "1_per_2_weeks": "max 1x per 2 weken",
+  "1_per_month": "max 1x per maand",
+  "1_per_2_months": "max 1x per 2 maanden",
+  // Oude waarde uit maaltijden van voor de frequenties gewijzigd werden.
+  "2_per_week": "max 1x per week",
 };
+
+// Stepper voor het formulier "Nieuwe maaltijd". Wordt in boot() gevuld.
+let customMealServings = null;
+
+// Paginering van het maaltijdenoverzicht: 4 kaarten per rij, 4 rijen per pagina.
+const MEALS_PER_PAGE = 16;
+let customMealsPage = 1;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -57,7 +67,13 @@ function escapeHtml(value) {
 }
 
 function iso(d) {
-  return d.toISOString().slice(0, 10);
+  // Bewust niet toISOString(): dat rekent om naar UTC, en een lokale datum om
+  // middernacht wordt in CEST dan de vorige dag. Zo kreeg de maandkalender
+  // dagnummers die een dag voorliepen op de weekdag.
+  const jaar = d.getFullYear();
+  const maand = String(d.getMonth() + 1).padStart(2, "0");
+  const dag = String(d.getDate()).padStart(2, "0");
+  return `${jaar}-${maand}-${dag}`;
 }
 
 function parseIsoDate(isoDate) {
@@ -529,8 +545,9 @@ function parseIngredientsText(text) {
 }
 
 function setDefaultDates() {
-  const today = new Date();
-  const start = getWeekMonday(today);
+  // Start altijd vandaag en toon een week vooruit; plannen doe je vanaf nu,
+  // niet vanaf de maandag die al voorbij is.
+  const start = new Date();
   const end = new Date(start);
   end.setDate(end.getDate() + 6);
   document.getElementById("start-date").value = iso(start);
@@ -556,6 +573,11 @@ function bindTabs() {
       document.querySelectorAll(".tab-panel").forEach((panel) => panel.classList.remove("active"));
       document.getElementById(`tab-${target}`).classList.add("active");
       localStorage.setItem(activeTabStorageKey, target);
+      // Een verborgen paneel heeft hoogte 0, dus daar valt niet te meten of een
+      // beschrijving afgekapt wordt. Opnieuw meten zodra de tab zichtbaar is.
+      if (target === "my-meals") {
+        toonMeerKnoppen(document.getElementById("custom-meals-list"));
+      }
     });
   });
 }
@@ -613,15 +635,10 @@ function getPersonCount() {
   return parseInt(document.getElementById("person-count").value, 10) || 2;
 }
 
+/* De planner regelt variatie en caloriebalans zelf; de gebruiker kiest alleen
+   nog de periode en het aantal personen. */
 function getMealOptions() {
-  const preferFish = document.getElementById("opt-fish").checked;
-  return {
-    prefer_fish: preferFish,
-    high_protein: document.getElementById("opt-protein").checked,
-    low_carb: document.getElementById("opt-low-carb").checked,
-    min_fish: preferFish ? 1 : 0,
-    person_count: getPersonCount(),
-  };
+  return { person_count: getPersonCount() };
 }
 
 async function fetchSession() {
@@ -1275,17 +1292,150 @@ async function loadCustomMeals() {
   updateCustomMealDeleteButton();
 }
 
+const courseLabels = {
+  voorgerecht: "Voorgerecht",
+  hoofdgerecht: "Hoofdgerecht",
+  dessert: "Dessert",
+};
+
+/* Vult de bron-dropdown met de bronnen die daadwerkelijk in de bibliotheek zitten. */
+function refreshSourceFilterOptions() {
+  const select = document.getElementById("cm-filter-source");
+  if (!select) return;
+  const huidig = select.value;
+  const bronnen = [...new Set(state.customMeals.map((m) => window.RecipeView.sourceLabel(m.source_url)))].sort();
+  select.innerHTML =
+    '<option value="">Alle bronnen</option>' +
+    bronnen.map((b) => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join("");
+  select.value = bronnen.includes(huidig) ? huidig : "";
+}
+
+/* --- Zoeken in de eigen maaltijden ---
+ *
+ * Ondersteunt & (en), | (of) en ! (niet), zoals "kip & tomaat ! citroen".
+ * & bindt sterker dan |, dus "a & b | c" is (a en b) of c. Termen mogen uit
+ * meerdere woorden bestaan; er wordt alleen op de operatoren gesplitst.
+ */
+function parseZoekQuery(ruw) {
+  const tokens = String(ruw || "")
+    .split(/([&|!])/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+
+  const groepen = [[]];   // OR-groepen, elk met AND-termen
+  let negeer = false;
+  for (const token of tokens) {
+    if (token === "&") continue;
+    if (token === "|") {
+      groepen.push([]);
+      negeer = false;
+      continue;
+    }
+    if (token === "!") {
+      negeer = true;
+      continue;
+    }
+    groepen[groepen.length - 1].push({ term: token.toLowerCase(), negeer });
+    negeer = false;
+  }
+  return groepen.filter((groep) => groep.length);
+}
+
+function komtOvereen(tekst, groepen) {
+  if (!groepen.length) return true;
+  return groepen.some((groep) =>
+    groep.every(({ term, negeer }) => {
+      const gevonden = tekst.includes(term);
+      return negeer ? !gevonden : gevonden;
+    })
+  );
+}
+
+/* Alles waarop gezocht kan worden, als één string. */
+function zoekTekstVoor(meal) {
+  if (meal._zoektekst) return meal._zoektekst;
+  const delen = [
+    meal.name || "",
+    window.RecipeView.sourceLabel(meal.source_url),
+    meal.description || "",
+    ...(meal.ingredients || []).map((i) => i.name || ""),
+    ...(meal.tags || []),
+    ...(meal.allergens || []),
+    meal.course || "",
+  ];
+  meal._zoektekst = delen.join(" ").toLowerCase();
+  return meal._zoektekst;
+}
+
+/* Calorieen per portie; 0 betekent "geen betrouwbare schatting". */
+function mealKcal(meal) {
+  return Number((meal.nutrition || {}).calories || 0);
+}
+
+function filteredCustomMeals() {
+  const bron = (document.getElementById("cm-filter-source")?.value || "").trim();
+  const gang = (document.getElementById("cm-filter-course")?.value || "").trim();
+  const kcalBereik = (document.getElementById("cm-filter-kcal")?.value || "").trim();
+  const zoekGroepen = parseZoekQuery(document.getElementById("cm-search")?.value || "");
+
+  let ondergrens = 0;
+  let bovengrens = Infinity;
+  if (kcalBereik) {
+    const [van, tot] = kcalBereik.split("-");
+    ondergrens = Number(van) || 0;
+    bovengrens = tot ? Number(tot) : Infinity;
+  }
+
+  return state.customMeals.filter((meal) => {
+    if (bron && window.RecipeView.sourceLabel(meal.source_url) !== bron) return false;
+    if (gang && (meal.course || "hoofdgerecht") !== gang) return false;
+    if (zoekGroepen.length && !komtOvereen(zoekTekstVoor(meal), zoekGroepen)) return false;
+    if (kcalBereik) {
+      const kcal = mealKcal(meal);
+      // Zonder schatting weten we het niet; die horen in geen enkele bucket thuis.
+      if (!kcal) return false;
+      if (kcal < ondergrens || kcal >= bovengrens) return false;
+    }
+    return true;
+  });
+}
+
 function renderCustomMeals() {
   const root = document.getElementById("custom-meals-list");
   if (!root) return;
   root.innerHTML = "";
 
+  refreshSourceFilterOptions();
+  const zichtbaar = filteredCustomMeals();
+  const teller = document.getElementById("cm-filter-count");
+  if (teller) {
+    teller.textContent = zichtbaar.length === state.customMeals.length
+      ? `${state.customMeals.length} maaltijden`
+      : `${zichtbaar.length} van ${state.customMeals.length} maaltijden`;
+  }
+
   if (!state.customMeals.length) {
     root.innerHTML = "<p class='muted'>Nog geen eigen maaltijden aangemaakt.</p>";
     return;
   }
+  if (!zichtbaar.length) {
+    const zoekterm = (document.getElementById("cm-search")?.value || "").trim();
+    root.innerHTML = zoekterm
+      ? `<p class='muted'>Niets gevonden voor <strong>${escapeHtml(zoekterm)}</strong>.</p>`
+      : "<p class='muted'>Geen maaltijden voor deze filter.</p>";
+    renderPager(0, 0);
+    return;
+  }
 
-  state.customMeals.forEach((meal) => {
+  const paginas = Math.max(1, Math.ceil(zichtbaar.length / MEALS_PER_PAGE));
+  // Na filteren kan de huidige pagina niet meer bestaan.
+  if (customMealsPage > paginas) customMealsPage = paginas;
+  if (customMealsPage < 1) customMealsPage = 1;
+  const start = (customMealsPage - 1) * MEALS_PER_PAGE;
+  const opDezePagina = zichtbaar.slice(start, start + MEALS_PER_PAGE);
+  renderPager(paginas, zichtbaar.length);
+
+  opDezePagina.forEach((meal) => {
     const selected = state.selectedCustomMealIds.includes(meal.id);
     const card = document.createElement("article");
     card.className = `menu-card menu-card-selectable${selected ? " selected" : ""}`;
@@ -1300,11 +1450,33 @@ function renderCustomMeals() {
 
     const body = document.createElement("div");
     body.className = "menu-card-body";
+    const kcal = mealKcal(meal);
+    const kcalPill = kcal
+      ? `<span class="kcal-pill">${Math.round(kcal)} kcal p.p.</span>`
+      : "";
     body.innerHTML = `
-      <h4>${meal.name}</h4>
-      <p>${meal.description || "Eigen maaltijd"}</p>
-      <p>${rotationLimitLabels[meal.rotation_limit] || rotationLimitLabels["1_per_week"]}</p>
+      <h4>${escapeHtml(meal.name)}</h4>
+      <p class="menu-card-source">
+        <span class="source-pill">${escapeHtml(window.RecipeView.sourceLabel(meal.source_url))}</span>
+        <span class="course-pill course-${escapeHtml(meal.course || "hoofdgerecht")}">${escapeHtml(courseLabels[meal.course] || courseLabels.hoofdgerecht)}</span>
+        ${kcalPill}
+      </p>
+      <p class="menu-card-description">${escapeHtml(meal.description || "Eigen maaltijd")}</p>
+      <button class="menu-card-more" type="button" hidden>Meer</button>
+      <p class="menu-card-meta">Voor ${meal.servings || window.RecipeView.DEFAULT_SERVINGS} personen &middot; ${rotationLimitLabels[meal.rotation_limit] || rotationLimitLabels["1_per_week"]}</p>
     `;
+
+    const omschrijving = body.querySelector(".menu-card-description");
+    const meerKnop = body.querySelector(".menu-card-more");
+    meerKnop.addEventListener("click", (event) => {
+      // De knop zit binnen de kaartlink; zonder preventDefault navigeer je naar
+      // het recept in plaats van de tekst uit te klappen.
+      event.preventDefault();
+      event.stopPropagation();
+      const uitgeklapt = omschrijving.classList.toggle("expanded");
+      meerKnop.textContent = uitgeklapt ? "Minder" : "Meer";
+    });
+
 
     const checkboxWrap = document.createElement("label");
     checkboxWrap.className = "meal-select-check";
@@ -1320,6 +1492,42 @@ function renderCustomMeals() {
     card.appendChild(link);
     card.appendChild(checkboxWrap);
     root.appendChild(card);
+  });
+
+  toonMeerKnoppen(root);
+}
+
+function renderPager(paginas, totaal) {
+  const pager = document.getElementById("cm-pager");
+  if (!pager) return;
+  // Bij een enkele pagina heeft bladeren geen zin.
+  pager.hidden = paginas <= 1;
+  if (pager.hidden) return;
+
+  const eerste = (customMealsPage - 1) * MEALS_PER_PAGE + 1;
+  const laatste = Math.min(customMealsPage * MEALS_PER_PAGE, totaal);
+  document.getElementById("cm-page-info").textContent =
+    `${eerste}-${laatste} van ${totaal} · pagina ${customMealsPage} van ${paginas}`;
+  document.getElementById("cm-page-prev").disabled = customMealsPage <= 1;
+  document.getElementById("cm-page-next").disabled = customMealsPage >= paginas;
+}
+
+function gaNaarPagina(nummer) {
+  customMealsPage = Math.max(1, nummer);
+  renderCustomMeals();
+  document.getElementById("custom-meals-list")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+/* Laat de uitklapknop alleen zien bij beschrijvingen die echt afgekapt worden.
+   Meten kan pas als alle kaarten in de DOM staan en de browser de hoogtes kent,
+   vandaar een aparte ronde na het renderen. */
+function toonMeerKnoppen(root) {
+  requestAnimationFrame(() => {
+    root.querySelectorAll(".menu-card-description").forEach((omschrijving) => {
+      const knop = omschrijving.parentElement.querySelector(".menu-card-more");
+      if (!knop) return;
+      knop.hidden = omschrijving.scrollHeight <= omschrijving.clientHeight + 2;
+    });
   });
 }
 
@@ -1447,9 +1655,11 @@ async function createCustomMeal() {
     calories: Number(document.getElementById("cm-calories").value || 0),
     tags: splitCsvText(document.getElementById("cm-tags").value).map((x) => x.toLowerCase()),
     allergens: splitCsvText(document.getElementById("cm-allergens").value).map((x) => x.toLowerCase()),
-    ingredients: parseIngredientsText(document.getElementById("cm-ingredients").value),
-    preparation: splitLinesText(document.getElementById("cm-preparation").value),
+    ingredients: window.RecipeView.parseIngredients(document.getElementById("cm-ingredients").value),
+    preparation: window.RecipeView.parseSteps(document.getElementById("cm-preparation").value),
     rotation_limit: document.getElementById("cm-rotation-limit").value,
+    course: document.getElementById("cm-course").value,
+    servings: customMealServings ? customMealServings.value : window.RecipeView.DEFAULT_SERVINGS,
   };
 
   const status = document.getElementById("cm-save-status");
@@ -1480,11 +1690,78 @@ async function createCustomMeal() {
   document.getElementById("cm-ingredients").value = "";
   document.getElementById("cm-preparation").value = "";
   document.getElementById("cm-rotation-limit").value = "1_per_week";
+  if (customMealServings) customMealServings.value = window.RecipeView.DEFAULT_SERVINGS;
   await loadCustomMeals();
 
   setTimeout(() => {
     status.textContent = "";
   }, 2000);
+}
+
+function initCustomMealServings() {
+  const host = document.getElementById("cm-servings");
+  if (!host || !window.RecipeView) return;
+  customMealServings = window.RecipeView.createServingsStepper({
+    value: window.RecipeView.DEFAULT_SERVINGS,
+  });
+  host.appendChild(customMealServings.element);
+}
+
+async function importRecipesFromUrl() {
+  const input = document.getElementById("cm-import-url");
+  const status = document.getElementById("cm-import-status");
+  const details = document.getElementById("cm-import-details");
+  const button = document.getElementById("cm-import-btn");
+  const url = (input.value || "").trim();
+
+  details.hidden = true;
+  details.innerHTML = "";
+  if (!url) {
+    status.textContent = "Geef een link op.";
+    return;
+  }
+
+  // Een overzichtspagina kan tot 20 recepten ophalen; dat duurt even.
+  setButtonBusy(button, true, "Bezig met importeren...");
+  status.textContent = "Bezig, dit kan een minuut duren bij meerdere recepten.";
+
+  try {
+    const res = await fetch("/api/custom-meals/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      status.textContent = data.error || "Import mislukt.";
+      return;
+    }
+
+    const overgeslagen = (data.skipped || []).length;
+    const mislukt = (data.errors || []).length;
+    status.textContent =
+      `${data.created} van ${data.found} gevonden ${data.found === 1 ? "recept" : "recepten"} toegevoegd` +
+      (overgeslagen ? `, ${overgeslagen} bestond al` : "") +
+      (mislukt ? `, ${mislukt} mislukt` : "") + ".";
+
+    const regels = [...(data.skipped || []), ...(data.errors || [])];
+    if (regels.length) {
+      details.innerHTML = regels
+        .slice(0, 12)
+        .map((r) => `<li>${escapeHtml(r.reden || "")}<br /><small>${escapeHtml(r.url || "")}</small></li>`)
+        .join("");
+      details.hidden = false;
+    }
+
+    if (data.created) {
+      input.value = "";
+      await loadCustomMeals();
+    }
+  } catch (err) {
+    status.textContent = "Import mislukt: geen verbinding met de server.";
+  } finally {
+    setButtonBusy(button, false);
+  }
 }
 
 function initCustomMealUpload() {
@@ -1635,9 +1912,17 @@ function renderHistoryCalendar() {
   });
 }
 
+/* Toont de hele maand van de startdatum. Dagen binnen de gekozen periode zijn
+   gemarkeerd en bedienbaar; de rest van de maand staat er als context bij, zodat
+   je ziet waar je week valt. */
 function renderCalendar() {
   const root = document.getElementById("calendar");
   root.innerHTML = "";
+
+  const startWaarde = document.getElementById("start-date").value;
+  const eindWaarde = document.getElementById("end-date").value;
+  if (!startWaarde || !eindWaarde) return;
+  const [vanIso, totIso] = startWaarde <= eindWaarde ? [startWaarde, eindWaarde] : [eindWaarde, startWaarde];
 
   const headers = ["maandag", "dinsdag", "woensdag", "donderdag", "vrijdag", "zaterdag", "zondag"];
   headers.forEach((label) => {
@@ -1647,70 +1932,146 @@ function renderCalendar() {
     root.appendChild(h);
   });
 
-  if (!state.days.length) return;
+  const dagPerDatum = new Map(state.days.map((d) => [d.date, d]));
+  const eersteVanDeMaand = monthStart(parseIsoDate(vanIso));
+  const volgendeMaand = shiftMonth(eersteVanDeMaand, 1);
+  const vandaag = iso(new Date());
 
-  const firstDate = parseIsoDate(state.days[0].date);
-  const weekday = firstDate.getDay();
-  const mondayIndex = weekday === 0 ? 6 : weekday - 1;
-
-  for (let i = 0; i < mondayIndex; i++) {
+  // Lege vakjes tot de eerste dag van de maand (week begint op maandag).
+  const weekdag = eersteVanDeMaand.getDay();
+  const offset = weekdag === 0 ? 6 : weekdag - 1;
+  for (let i = 0; i < offset; i += 1) {
     const spacer = document.createElement("div");
     spacer.className = "day-spacer";
     root.appendChild(spacer);
   }
 
-  state.days.forEach((day) => {
+  for (let d = new Date(eersteVanDeMaand); d < volgendeMaand; d.setDate(d.getDate() + 1)) {
+    const datum = iso(d);
+    const inPeriode = datum >= vanIso && datum <= totIso;
+    const dag = dagPerDatum.get(datum);
+
     const el = document.createElement("div");
-    el.className = `day ${day.cook ? "cook" : "skip"}`;
-    const retryDisabled = !day.cook ? "disabled" : "";
+    el.className = "day month-day";
+    if (!inPeriode) el.classList.add("outside-range");
+    if (datum === vandaag) el.classList.add("is-today");
+    if (inPeriode && dag) el.classList.add(dag.cook ? "cook" : "skip");
+
+    if (!inPeriode) {
+      el.innerHTML = `<span class="day-top"><strong>${d.getDate()}</strong></span>`;
+      root.appendChild(el);
+      continue;
+    }
+
+    const kookt = dag ? dag.cook : true;
     el.innerHTML = `
       <span class="day-top">
-        <strong>${formatDateEu(day.date)}</strong>
-        <em>${weekdayShort(day.date)}</em>
+        <strong>${d.getDate()}</strong>
+        <em>${weekdayShort(datum)}</em>
       </span>
-      <span class="day-state">${day.cook ? "Koken" : "Niet koken"}</span>
-      <span class="day-meal">${day.meal_name || "Nog geen maaltijd"}</span>
-      <span class="day-actions"><button class="retry-btn" ${retryDisabled} type="button">Opnieuw</button></span>
+      <span class="day-state">${kookt ? "Koken" : "Niet koken"}</span>
+      <span class="day-meal">${escapeHtml((dag && dag.meal_name) || "Nog geen maaltijd")}</span>
+      <span class="day-actions">
+        <button class="retry-btn" type="button" ${kookt ? "" : "disabled"}>Opnieuw</button>
+        <button class="pick-btn" type="button" ${kookt ? "" : "disabled"}>Kies zelf</button>
+      </span>
     `;
 
     el.addEventListener("click", async () => {
-      await fetch(`/api/calendar/${day.date}`, {
+      await fetch(`/api/calendar/${datum}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cook: !day.cook }),
+        body: JSON.stringify({ cook: !kookt }),
       });
       await loadCalendar();
     });
 
-    const retryBtn = el.querySelector(".retry-btn");
-    retryBtn.addEventListener("click", async (event) => {
+    el.querySelector(".retry-btn").addEventListener("click", async (event) => {
       event.preventDefault();
       event.stopPropagation();
-      if (!day.cook) return;
-      retryBtn.disabled = true;
-      retryBtn.textContent = "...";
-
-      const res = await fetch(`/api/calendar/${day.date}/retry`, {
+      if (!kookt) return;
+      const knop = event.currentTarget;
+      setButtonBusy(knop, true, "...");
+      const res = await fetch(`/api/calendar/${datum}/retry`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ options: getMealOptions(), person_count: getPersonCount() }),
       });
-
       if (res.ok) {
-        const payload = await res.json();
-        const item = payload.item;
-        const idx = state.plan.findIndex((p) => p.date === item.date);
-        if (idx >= 0) state.plan[idx] = item;
-        else state.plan.push(item);
         state.shopping = [];
         renderShopping();
       }
-
       await loadCalendar();
     });
 
+    el.querySelector(".pick-btn").addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!kookt) return;
+      openMealPicker(datum);
+    });
+
     root.appendChild(el);
+  }
+}
+
+/* Dialoog om zelf een gerecht voor een dag te kiezen. */
+let mealPickerDate = null;
+
+function openMealPicker(datum) {
+  mealPickerDate = datum;
+  const dialog = document.getElementById("meal-picker");
+  document.getElementById("meal-picker-title").textContent =
+    `Kies een gerecht voor ${weekdayName(datum)} ${formatDateEu(datum)}`;
+  const zoek = document.getElementById("meal-picker-search");
+  zoek.value = "";
+  renderMealPickerList("");
+  dialog.showModal();
+  zoek.focus();
+}
+
+function renderMealPickerList(zoekterm) {
+  const lijst = document.getElementById("meal-picker-list");
+  const groepen = parseZoekQuery(zoekterm);
+  // Ook hier alleen hoofdgerechten: de planner vult avondmalen in.
+  const treffers = state.customMeals
+    .filter((meal) => (meal.course || "hoofdgerecht") === "hoofdgerecht")
+    .filter((meal) => komtOvereen(zoekTekstVoor(meal), groepen));
+
+  if (!treffers.length) {
+    lijst.innerHTML = "<li class='muted'>Niets gevonden.</li>";
+    return;
+  }
+
+  lijst.innerHTML = treffers
+    .slice(0, 60)
+    .map((meal) => {
+      const kcal = mealKcal(meal);
+      return `<li><button type="button" class="meal-picker-item" data-meal="${escapeHtml(meal.id)}">
+        <span class="meal-picker-naam">${escapeHtml(meal.name)}</span>
+        <span class="meal-picker-meta">${escapeHtml(courseLabels[meal.course] || courseLabels.hoofdgerecht)}${kcal ? ` &middot; ${Math.round(kcal)} kcal p.p.` : ""}</span>
+      </button></li>`;
+    })
+    .join("");
+
+  lijst.querySelectorAll(".meal-picker-item").forEach((knop) => {
+    knop.addEventListener("click", () => kiesMaaltijd(knop.dataset.meal));
   });
+}
+
+async function kiesMaaltijd(mealId) {
+  if (!mealPickerDate) return;
+  const res = await fetch(`/api/calendar/${mealPickerDate}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ meal_id: mealId }),
+  });
+  document.getElementById("meal-picker").close();
+  if (res.ok) {
+    state.shopping = [];
+    renderShopping();
+    await loadCalendar();
+  }
 }
 
 function renderMenuGallery() {
@@ -2157,6 +2518,7 @@ async function bootStep(label, fn) {
 async function boot() {
   initOfflineSupport();
   initSidebarToggle();
+  initCustomMealServings();
   initCustomMealUpload();
   initProfileChipField("allergies");
   initProfileChipField("likes");
@@ -2206,6 +2568,41 @@ async function boot() {
   document.getElementById("cm-save-btn").addEventListener("click", createCustomMeal);
   document.getElementById("cm-delete-btn").addEventListener("click", deleteSelectedCustomMeals);
   document.getElementById("cm-bulk-toggle-btn").addEventListener("click", toggleBulkPanel);
+  // Bij elke filterwijziging terug naar de eerste pagina; anders sta je op een
+  // pagina die na het filteren niet meer bestaat.
+  ["cm-filter-source", "cm-filter-course", "cm-filter-kcal"].forEach((id) => {
+    document.getElementById(id).addEventListener("change", () => {
+      customMealsPage = 1;
+      renderCustomMeals();
+    });
+  });
+  document.getElementById("meal-picker-search").addEventListener("input", (event) => {
+    renderMealPickerList(event.target.value);
+  });
+  document.getElementById("cm-page-prev").addEventListener("click", () => gaNaarPagina(customMealsPage - 1));
+  document.getElementById("cm-page-next").addEventListener("click", () => gaNaarPagina(customMealsPage + 1));
+
+  const zoekveld = document.getElementById("cm-search");
+  const wisknop = document.getElementById("cm-search-clear");
+  zoekveld.addEventListener("input", () => {
+    wisknop.hidden = !zoekveld.value;
+    customMealsPage = 1;
+    renderCustomMeals();
+  });
+  wisknop.addEventListener("click", () => {
+    zoekveld.value = "";
+    wisknop.hidden = true;
+    customMealsPage = 1;
+    renderCustomMeals();
+    zoekveld.focus();
+  });
+  document.getElementById("cm-import-btn").addEventListener("click", importRecipesFromUrl);
+  document.getElementById("cm-import-url").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      importRecipesFromUrl();
+    }
+  });
   document.getElementById("cm-bulk-export-btn").addEventListener("click", exportBulkTemplate);
   document.getElementById("cm-bulk-upload-btn").addEventListener("click", uploadBulkTemplate);
   document.getElementById("add-extra-item-btn").addEventListener("click", addExtraShoppingItem);

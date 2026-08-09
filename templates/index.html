@@ -13,7 +13,7 @@
   <link rel="apple-touch-icon" href="/static/icon-192.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="/static/styles.css?v=20260808v2" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260809v2" />
 </head>
 <body>
   <div class="app-layout">
@@ -172,12 +172,6 @@
               <label>Tot <input type="date" id="end-date" /></label>
             </div>
 
-            <div class="toggle-list">
-              <label class="checkline"><input type="checkbox" id="opt-fish" /> <span>Voeg extra vis toe</span></label>
-              <label class="checkline"><input type="checkbox" id="opt-protein" checked /> <span>Meer proteinen</span></label>
-              <label class="checkline"><input type="checkbox" id="opt-low-carb" checked /> <span>Minder koolhydraten</span></label>
-            </div>
-
             <div class="form-grid single">
               <label>Aantal personen
                 <select id="person-count">
@@ -192,6 +186,11 @@
             <div class="button-row">
               <button id="generate-btn" class="btn btn-primary" type="button">Genereer maaltijden</button>
             </div>
+            <p class="planner-note">
+              De planner mikt op een gezond weekgemiddelde: een zwaardere dag wordt
+              opgevangen door lichtere dagen erna. Hij wisselt ook af in eiwitbron,
+              zetmeel en groente, zodat je niet vier keer pasta krijgt.
+            </p>
           </section>
 
           <section class="card">
@@ -206,6 +205,16 @@
           <ul id="plan-list" class="list-plain"></ul>
         </section>
       </section>
+
+      <dialog id="meal-picker" class="meal-picker">
+        <form method="dialog" class="meal-picker-head">
+          <h3 id="meal-picker-title">Kies een gerecht</h3>
+          <button class="pager-btn" value="cancel">Sluiten</button>
+        </form>
+        <label for="meal-picker-search" class="visually-hidden">Zoek een gerecht</label>
+        <input id="meal-picker-search" type="search" autocomplete="off" placeholder="Zoek op naam of ingredient" />
+        <ul id="meal-picker-list" class="meal-picker-list"></ul>
+      </dialog>
 
       <section id="tab-shopping" class="tab-panel">
         <p id="offline-banner" class="offline-banner" role="status" aria-live="polite" hidden></p>
@@ -279,25 +288,66 @@
               <label>Allergenen (komma) <input type="text" id="cm-allergens" placeholder="fish, lactose" /></label>
             </div>
             <div class="form-grid single">
-              <label>Ingredienten (1 per lijn: naam, hoeveelheid, unit)</label>
+              <label>Voor hoeveel personen</label>
+              <div class="servings-block servings-block-form">
+                <div id="cm-servings"></div>
+                <span class="muted servings-caption-note">
+                  Noteer de hoeveelheden hieronder voor dit aantal. De planner rekent
+                  automatisch om naar het aantal personen dat je inplant.
+                </span>
+              </div>
+            </div>
+            <div class="form-grid single">
+              <label for="cm-ingredients">Ingredienten</label>
+              <span class="edit-help">1 per lijn: <code>naam, aantal, eenheid</code></span>
               <textarea id="cm-ingredients" rows="5" placeholder="kabeljauw, 700, g&#10;spinazie, 800, g"></textarea>
             </div>
             <div class="form-grid single">
-              <label>Bereidingswijze (1 stap per lijn)</label>
-              <textarea id="cm-preparation" rows="5" placeholder="Kruid de vis met peper en zout&#10;Bak de vis 8 minuten&#10;Serveer met groenten"></textarea>
+              <label for="cm-preparation">Bereidingswijze</label>
+              <span class="edit-help">
+                Lege regel tussen twee stappen; die worden automatisch genummerd.
+                Eigen titel met <code>## Titel</code>, opsomming met <code>-</code>,
+                nadruk met <code>**vet**</code>.
+              </span>
+              <textarea id="cm-preparation" rows="8" placeholder="Snij de groenten in gelijke stukken&#10;Kruid de vis met peper en zout&#10;&#10;Bak de vis 8 minuten&#10;- 4 minuten op de velkant&#10;- daarna omdraaien&#10;&#10;Serveer met de groenten"></textarea>
+            </div>
+            <div class="form-grid single">
+              <label>Gang
+                <select id="cm-course">
+                  <option value="voorgerecht">Voorgerecht</option>
+                  <option value="hoofdgerecht" selected>Hoofdgerecht</option>
+                  <option value="dessert">Dessert</option>
+                </select>
+              </label>
             </div>
             <div class="form-grid single">
               <label>Max rotatiefrequentie
                 <select id="cm-rotation-limit">
-                  <option value="2_per_week">2 keer per week</option>
                   <option value="1_per_week" selected>1 keer per week</option>
+                  <option value="1_per_2_weeks">1 keer per 2 weken</option>
                   <option value="1_per_month">1 keer per maand</option>
+                  <option value="1_per_2_months">1 keer per 2 maanden</option>
                 </select>
               </label>
             </div>
             <div class="button-row">
               <button id="cm-save-btn" class="btn btn-primary" type="button">Opslaan maaltijd</button>
               <span id="cm-save-status" class="muted"></span>
+            </div>
+
+            <div class="import-panel">
+              <h4>Importeer van het internet</h4>
+              <p class="muted import-help">
+                Plak de link van een recept, of van een overzichtspagina met meerdere
+                recepten. Ingredienten, porties, stappen en foto worden overgenomen.
+              </p>
+              <label for="cm-import-url" class="visually-hidden">Receptlink</label>
+              <input id="cm-import-url" type="url" placeholder="https://..." />
+              <div class="button-row">
+                <button id="cm-import-btn" class="btn btn-primary" type="button">Importeer</button>
+                <span id="cm-import-status" class="muted"></span>
+              </div>
+              <ul id="cm-import-details" class="import-details" hidden></ul>
             </div>
           </section>
 
@@ -310,6 +360,45 @@
                 <button id="cm-delete-btn" class="btn btn-primary" type="button" disabled>Verwijder</button>
               </div>
             </div>
+
+            <div class="meal-search-row">
+              <label for="cm-search" class="meal-search-field">Zoeken
+                <span class="meal-search">
+                  <input id="cm-search" type="search" autocomplete="off"
+                         placeholder="bv. kip &amp; tomaat ! citroen" />
+                  <button id="cm-search-clear" class="meal-search-clear" type="button"
+                          aria-label="Zoekopdracht wissen" hidden>&times;</button>
+                </span>
+              </label>
+            </div>
+            <div class="meal-filters">
+              <label for="cm-filter-source">Bron
+                <select id="cm-filter-source">
+                  <option value="">Alle bronnen</option>
+                </select>
+              </label>
+              <label for="cm-filter-course">Gang
+                <select id="cm-filter-course">
+                  <option value="">Alle gangen</option>
+                  <option value="voorgerecht">Voorgerecht</option>
+                  <option value="hoofdgerecht">Hoofdgerecht</option>
+                  <option value="dessert">Dessert</option>
+                </select>
+              </label>
+              <label for="cm-filter-kcal">Calorieen
+                <select id="cm-filter-kcal">
+                  <option value="">Alle</option>
+                  <option value="0-600">0 tot 600 kcal</option>
+                  <option value="600-1000">600 tot 1000 kcal</option>
+                  <option value="1000-">1000 kcal en meer</option>
+                </select>
+              </label>
+              <span id="cm-filter-count" class="muted meal-filter-count"></span>
+            </div>
+            <p class="muted meal-search-hint">
+              Combineer met <code>&amp;</code> (en), <code>|</code> (of) en <code>!</code> (niet).
+              Bijvoorbeeld <code>kip &amp; tomaat ! citroen</code>.
+            </p>
             <section id="cm-bulk-panel" class="bulk-panel" hidden>
               <p class="muted"><strong>Template (JSON):</strong> plak een lijst van gerechten. Elk gerecht bevat minstens <code>name</code>, <code>ingredients</code> en optioneel <code>description</code>, <code>image_url</code>, <code>rating</code>, <code>preparation</code>, <code>tags</code>, <code>allergens</code>, <code>protein</code>, <code>carbs</code>, <code>calories</code>, <code>rotation_limit</code>.</p>
               <p class="muted">Voor ingrediënten: <code>[{"name":"kipfilet","quantity":600,"unit":"g"}]</code>. Voor bereiding: <code>["Stap 1", "Stap 2"]</code>.</p>
@@ -341,6 +430,11 @@
               </div>
             </section>
             <div id="custom-meals-list" class="menu-gallery"></div>
+            <nav id="cm-pager" class="meal-pager" aria-label="Bladeren door maaltijden" hidden>
+              <button id="cm-page-prev" class="pager-btn" type="button">Vorige</button>
+              <span id="cm-page-info" class="muted"></span>
+              <button id="cm-page-next" class="pager-btn" type="button">Volgende</button>
+            </nav>
           </section>
         </section>
       </section>
@@ -522,6 +616,7 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260808v2"></script>
+  <script src="/static/recipe-view.js?v=20260809v2"></script>
+  <script src="/static/app.js?v=20260809v2"></script>
 </body>
 </html>

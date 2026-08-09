@@ -8,6 +8,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from .config_loader import load_settings
 from .db import bootstrap_db_settings, init_db
 from .logging_setup import configure_logging
+from .nutrition import seed_database
 from .routes import register_routes
 
 
@@ -43,6 +44,7 @@ def create_app():
 
     init_db()
     bootstrap_db_settings(settings)
+    seed_database()
 
     register_routes(app)
     return app

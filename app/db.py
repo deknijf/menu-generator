@@ -8,6 +8,14 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 DB_PATH = Path("data/app.db")
 DEFAULT_GROUP_SLUG = "default-family"
+# Porties per maaltijd. Een recept legt zijn hoeveelheden vast voor dit aantal
+# personen; de planner schaalt daarvandaan naar het gekozen aantal.
+DEFAULT_SERVINGS = 2
+MIN_SERVINGS = 1
+MAX_SERVINGS = 6
+# Gangen. 'hoofdgerecht' is de standaard: dat is wat de planner inplant.
+COURSES = ("voorgerecht", "hoofdgerecht", "dessert")
+DEFAULT_COURSE = "hoofdgerecht"
 DEFAULT_NUTRITION = {
     "high_protein_weight": 1.3,
     "low_carb_weight": 1.1,
@@ -171,6 +179,11 @@ def init_db():
             ingredients_json TEXT NOT NULL DEFAULT '[]',
             preparation_json TEXT NOT NULL DEFAULT '[]',
             rotation_limit TEXT NOT NULL DEFAULT '1_per_week',
+            -- Voor hoeveel personen de ingredienthoeveelheden gelden.
+            servings INTEGER NOT NULL DEFAULT 2,
+            -- Herkomst bij import; leeg voor zelf ingevoerde maaltijden.
+            source_url TEXT NOT NULL DEFAULT '',
+            course TEXT NOT NULL DEFAULT 'hoofdgerecht',
             protein REAL NOT NULL DEFAULT 0,
             carbs REAL NOT NULL DEFAULT 0,
             calories REAL NOT NULL DEFAULT 0,
@@ -218,6 +231,20 @@ def init_db():
         )
         """
     )
+    # Energiewaarde per ingredient, voor de kcal-schatting per recept.
+    # Staat in de database zodat waarden aan te vullen zijn zonder code te wijzigen.
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ingredient_energy (
+            name TEXT PRIMARY KEY,
+            kcal_per_100g REAL NOT NULL,
+            gram_per_piece REAL,
+            source TEXT NOT NULL DEFAULT 'seed',
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
     # Mislukte logins, voor de throttle. Staat in de DB en niet in het geheugen,
     # omdat gunicorn met meerdere workers draait die geen state delen.
     cur.execute(
@@ -243,6 +270,20 @@ def init_db():
     columns = {row["name"] for row in cur.fetchall()}
     if "group_id" not in columns:
         _safe_add_column("ALTER TABLE custom_meals ADD COLUMN group_id INTEGER NOT NULL DEFAULT 1")
+    if "servings" not in columns:
+        _safe_add_column("ALTER TABLE custom_meals ADD COLUMN servings INTEGER NOT NULL DEFAULT 2")
+    if "source_url" not in columns:
+        _safe_add_column("ALTER TABLE custom_meals ADD COLUMN source_url TEXT NOT NULL DEFAULT ''")
+    if "course" not in columns:
+        _safe_add_column("ALTER TABLE custom_meals ADD COLUMN course TEXT NOT NULL DEFAULT 'hoofdgerecht'")
+    cur.execute(
+        "UPDATE custom_meals SET course = ? WHERE course IS NULL OR course NOT IN (?, ?, ?)",
+        (DEFAULT_COURSE, *COURSES),
+    )
+    # Porties buiten 1-6 halen: die bestonden voor de limiet er was.
+    cur.execute("UPDATE custom_meals SET servings = 2 WHERE servings IS NULL OR servings < 1 OR servings > 6")
+    # '2_per_week' bestaat niet meer als optie; die maaltijden gaan naar 1 per week.
+    cur.execute("UPDATE custom_meals SET rotation_limit = '1_per_week' WHERE rotation_limit = '2_per_week'")
     if "rotation_limit" not in columns:
         _safe_add_column("ALTER TABLE custom_meals ADD COLUMN rotation_limit TEXT NOT NULL DEFAULT '1_per_week'")
     if "preparation_json" not in columns:
@@ -307,6 +348,65 @@ def _as_password_hash(value):
     if _is_password_hash(raw):
         return raw
     return generate_password_hash(raw)
+
+
+def list_ingredient_energy():
+    """Alle bekende energiewaarden als {naam: (kcal_per_100g, gram_per_stuk)}."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT name, kcal_per_100g, gram_per_piece FROM ingredient_energy")
+    rows = cur.fetchall()
+    conn.close()
+    return {r["name"]: (float(r["kcal_per_100g"]), r["gram_per_piece"]) for r in rows}
+
+
+def upsert_ingredient_energy(items, source="seed", overschrijven=False):
+    """Vult de energietabel aan.
+
+    Standaard blijven bestaande rijen staan: wat de gebruiker zelf corrigeerde
+    mag niet door een seed overschreven worden.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    aantal = 0
+    for naam, waarden in (items or {}).items():
+        kcal, gram = waarden if isinstance(waarden, (tuple, list)) else (waarden, None)
+        if overschrijven:
+            cur.execute(
+                """
+                INSERT INTO ingredient_energy (name, kcal_per_100g, gram_per_piece, source)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    kcal_per_100g=excluded.kcal_per_100g,
+                    gram_per_piece=excluded.gram_per_piece,
+                    source=excluded.source,
+                    updated_at=CURRENT_TIMESTAMP
+                """,
+                (str(naam).strip().lower(), float(kcal), gram, source),
+            )
+        else:
+            cur.execute(
+                "INSERT OR IGNORE INTO ingredient_energy (name, kcal_per_100g, gram_per_piece, source) VALUES (?, ?, ?, ?)",
+                (str(naam).strip().lower(), float(kcal), gram, source),
+            )
+        aantal += cur.rowcount or 0
+    conn.commit()
+    conn.close()
+    return aantal
+
+
+def _clamp_course(value, fallback=DEFAULT_COURSE):
+    token = str(value or "").strip().lower()
+    return token if token in COURSES else fallback
+
+
+def _clamp_servings(value, fallback=DEFAULT_SERVINGS):
+    """Porties zitten altijd tussen 1 en 6; buiten bereik valt terug op 2."""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return min(MAX_SERVINGS, max(MIN_SERVINGS, number))
 
 
 def _load_json_or_default(value, default):
@@ -1277,7 +1377,7 @@ def list_custom_meals(email):
         SELECT
             id, email, name, description, image_url, rating,
             tags_json, allergens_json, ingredients_json, preparation_json, rotation_limit,
-            protein, carbs, calories
+            servings, source_url, course, protein, carbs, calories
         FROM custom_meals
         WHERE group_id = ?
         ORDER BY id DESC
@@ -1319,6 +1419,9 @@ def list_custom_meals(email):
                 "ingredients": ingredients,
                 "preparation": preparation,
                 "rotation_limit": row["rotation_limit"] or "1_per_week",
+                "servings": _clamp_servings(row["servings"]),
+                "source_url": row["source_url"] or "",
+                "course": _clamp_course(row["course"]),
                 "nutrition": {
                     "protein": float(row["protein"] or 0),
                     "carbs": float(row["carbs"] or 0),
@@ -1340,6 +1443,9 @@ def create_custom_meal(email, payload):
     ingredients = payload.get("ingredients") or []
     preparation = payload.get("preparation") or []
     rotation_limit = (payload.get("rotation_limit") or "1_per_week").strip()
+    servings = _clamp_servings(payload.get("servings"))
+    source_url = str(payload.get("source_url") or "").strip()[:500]
+    course = _clamp_course(payload.get("course"))
     protein = float(payload.get("protein") or 0)
     carbs = float(payload.get("carbs") or 0)
     calories = float(payload.get("calories") or 0)
@@ -1353,9 +1459,9 @@ def create_custom_meal(email, payload):
             group_id,
             rating,
             tags_json, allergens_json, ingredients_json, preparation_json, rotation_limit,
-            protein, carbs, calories
+            servings, source_url, course, protein, carbs, calories
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             email,
@@ -1369,6 +1475,9 @@ def create_custom_meal(email, payload):
             json.dumps(ingredients),
             json.dumps(preparation),
             rotation_limit,
+            servings,
+            source_url,
+            course,
             protein,
             carbs,
             calories,
@@ -1416,6 +1525,9 @@ def update_custom_meal(email, meal_id, payload):
     ingredients = payload.get("ingredients") or []
     preparation = payload.get("preparation") or []
     rotation_limit = (payload.get("rotation_limit") or "1_per_week").strip()
+    servings = _clamp_servings(payload.get("servings"))
+    source_url = str(payload.get("source_url") or "").strip()[:500]
+    course = _clamp_course(payload.get("course"))
     protein = float(payload.get("protein") or 0)
     carbs = float(payload.get("carbs") or 0)
     calories = float(payload.get("calories") or 0)
@@ -1435,6 +1547,9 @@ def update_custom_meal(email, meal_id, payload):
             ingredients_json = ?,
             preparation_json = ?,
             rotation_limit = ?,
+            servings = ?,
+            source_url = ?,
+            course = ?,
             protein = ?,
             carbs = ?,
             calories = ?
@@ -1450,6 +1565,9 @@ def update_custom_meal(email, meal_id, payload):
             json.dumps(ingredients),
             json.dumps(preparation),
             rotation_limit,
+            servings,
+            source_url,
+            course,
             protein,
             carbs,
             calories,
@@ -1474,7 +1592,7 @@ def get_custom_meal(email, meal_id):
         SELECT
             id, email, name, description, image_url, rating,
             tags_json, allergens_json, ingredients_json, preparation_json, rotation_limit,
-            protein, carbs, calories
+            servings, source_url, course, protein, carbs, calories
         FROM custom_meals
         WHERE group_id = ? AND id = ?
         """,
@@ -1512,6 +1630,9 @@ def get_custom_meal(email, meal_id):
         "ingredients": ingredients,
         "preparation": preparation,
         "rotation_limit": row["rotation_limit"] or "1_per_week",
+        "servings": _clamp_servings(row["servings"]),
+        "source_url": row["source_url"] or "",
+        "course": _clamp_course(row["course"]),
         "nutrition": {
             "protein": float(row["protein"] or 0),
             "carbs": float(row["carbs"] or 0),

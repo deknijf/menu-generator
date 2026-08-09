@@ -25,7 +25,10 @@ DEFAULT_MENU_PROMPT = (
     "Vermijd extreme diëten, exotische ingrediënten en onrealistische bereidingen."
 )
 DEFAULT_BLOCKED_ALLERGIES = []
-ALLOWED_ROTATION_LIMITS = {"2_per_week", "1_per_week", "1_per_month"}
+ALLOWED_ROTATION_LIMITS = {"1_per_week", "1_per_2_weeks", "1_per_month", "1_per_2_months"}
+# "2_per_week" bestond vroeger en zit nog in oude caches.
+LEGACY_ROTATION_LIMITS = {"2_per_week": "1_per_week"}
+DEFAULT_SERVINGS = 2
 MEAT_TAGS = {
     "fish": ["fish", "vis", "zalm", "kabeljauw", "tonijn", "salmon", "cod", "tuna"],
     "chicken": ["kip", "chicken", "kalkoen", "turkey"],
@@ -192,6 +195,7 @@ def _normalize_preparation(steps, name):
 
 def _normalize_rotation_limit(value):
     token = str(value or "1_per_week").strip().lower()
+    token = LEGACY_ROTATION_LIMITS.get(token, token)
     return token if token in ALLOWED_ROTATION_LIMITS else "1_per_week"
 
 
@@ -298,9 +302,9 @@ def _build_prompt(config, limit, planner_context=None):
         )
     servings_rule = (
         f"De gebruiker plant nu voor {person_count} personen. "
-        f"Noteer de JSON-ingrediëntenhoeveelheden expliciet voor {base_servings} personen, "
-        "want de app schaalt die later automatisch naar het gekozen aantal personen. "
-        f"De gekozen porties moeten wel logisch aanvoelen voor een maaltijd voor {person_count} personen."
+        f"Noteer de JSON-ingrediëntenhoeveelheden altijd voor {DEFAULT_SERVINGS} personen en zet "
+        f'"servings": {DEFAULT_SERVINGS} in elk item. De app schaalt die hoeveelheden zelf naar het '
+        "gekozen aantal personen, dus reken ze niet vooraf om."
     )
     return f"""
 Je bent een meal planner assistent.
@@ -323,7 +327,8 @@ Belangrijke regels:
     "protein": number,
     "carbs": number,
     "calories": number,
-    "rotation_limit": "2_per_week|1_per_week|1_per_month"
+    "servings": 2,
+    "rotation_limit": "1_per_week|1_per_2_weeks|1_per_month|1_per_2_months"
   }}
 - Gebruik Nederlandse namen voor gerechten, ingrediënten en stappen.
 - Maak realistische recepten voor een Belgische/Nederlandse supermarkt.
@@ -386,6 +391,7 @@ def _normalize_recipe(item, index, blocked_allergies):
         "preparation": _normalize_preparation((item or {}).get("preparation") or [], name),
         "nutrition": nutrition,
         "rotation_limit": _normalize_rotation_limit((item or {}).get("rotation_limit") or "1_per_week"),
+        "servings": DEFAULT_SERVINGS,
     }
 
 

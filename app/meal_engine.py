@@ -54,6 +54,12 @@ def _cuisine_bias(recipe, settings):
     return score
 
 
+# Waarden voor recepten waar geen voedingsgegevens bij zitten: een doorsnee
+# avondmaal, zodat ze niet gestraft worden voor ontbrekende data.
+NEUTRAAL_EIWIT = 30.0
+NEUTRAAL_KOOLHYDRATEN = 35.0
+
+
 def _recipe_score(recipe, settings, options):
     family = settings["family"]
     nutrition = settings["nutrition"]
@@ -74,8 +80,11 @@ def _recipe_score(recipe, settings, options):
         if tag == "favorite":
             score += 1.25
 
-    protein = recipe["nutrition"].get("protein", 0)
-    carbs = recipe["nutrition"].get("carbs", 0)
+    # Ontbrekende voedingswaarden zijn onbekend, niet nul. Zonder deze terugval
+    # scoort elk geimporteerd recept (protein 0) structureel lager dan een
+    # zelf ingevoerd recept, en kiest de planner altijd dezelfde handvol.
+    protein = float(recipe["nutrition"].get("protein") or 0) or NEUTRAAL_EIWIT
+    carbs = float(recipe["nutrition"].get("carbs") or 0) or NEUTRAAL_KOOLHYDRATEN
 
     protein_weight = nutrition.get("high_protein_weight", 1.0)
     carb_weight = nutrition.get("low_carb_weight", 1.0)
@@ -116,8 +125,23 @@ def _day_is_weekend(day_iso):
     return weekday in {4, 5, 6}  # Friday/Saturday/Sunday
 
 
+# De tags zijn Nederlands sinds ze automatisch afgeleid worden, maar de
+# scoringslogica hieronder vraagt van oudsher naar de Engelse namen. Deze aliassen
+# houden beide werkend; zonder dit stopte de vis-op-vis-regel stil met werken.
+_TAG_ALIASSEN = {
+    "fish": ("fish", "vis", "zalm", "kabeljauw", "tonijn"),
+    "heavy": ("heavy", "zwaar"),
+    "pasta": ("pasta", "spaghetti"),
+    "chicken": ("chicken", "kip", "gevogelte"),
+    "beef": ("beef", "rund"),
+    "vegetarian": ("vegetarian", "vegetarisch"),
+    "favorite": ("favorite", "favoriet"),
+}
+
+
 def _has_tag(recipe, tag):
-    return tag in recipe.get("tags", [])
+    tags = {str(t).strip().lower() for t in recipe.get("tags", [])}
+    return bool(tags.intersection(_TAG_ALIASSEN.get(tag, (tag,))))
 
 
 def _is_pasta_like(recipe):
@@ -170,6 +194,42 @@ def _starch_key(recipe):
     return "none"
 
 
+def _vegetable_key(recipe):
+    """De hoofdgroente van een gerecht, of "none".
+
+    Zonder deze dimensie kan een week vier keer bloemkool bevatten zolang de
+    eiwitbron en het zetmeel wisselen.
+    """
+    tags = {str(tag or "").strip().lower() for tag in recipe.get("tags", [])}
+    delen = [str(recipe.get("name", "")).lower(), " ".join(tags)]
+    for ingredient in recipe.get("ingredients", []):
+        delen.append(str(ingredient.get("name", "")).lower())
+    tekst = " ".join(deel for deel in delen if deel)
+
+    markers = [
+        ("bloemkool", ["bloemkool", "cauliflower"]),
+        ("broccoli", ["broccoli"]),
+        ("spinazie", ["spinazie", "spinach"]),
+        ("wortel", ["wortel", "peen", "carrot"]),
+        ("prei", ["prei", "leek"]),
+        ("courgette", ["courgette", "zucchini"]),
+        ("aubergine", ["aubergine", "eggplant"]),
+        ("paprika", ["paprika"]),
+        ("kool", ["spruit", "boerenkool", "spitskool", "witte kool", "rode kool"]),
+        ("champignon", ["champignon", "paddenstoel", "mushroom"]),
+        ("tomaat", ["tomaat", "tomaten", "tomato"]),
+        ("witloof", ["witloof", "chicon"]),
+        ("pompoen", ["pompoen", "pumpkin"]),
+        ("venkel", ["venkel", "fennel"]),
+        ("boon", ["sperzieboon", "prinsessenboon", "boontjes"]),
+        ("erwt", ["erwten", "doperwten"]),
+    ]
+    for sleutel, woorden in markers:
+        if sleutel in tags or any(woord in tekst for woord in woorden):
+            return sleutel
+    return "none"
+
+
 def _variety_penalty(recipe, recent_recipes):
     if not recent_recipes:
         return 0.0
@@ -206,7 +266,17 @@ def _variety_penalty(recipe, recent_recipes):
             penalty += 2.35
         if len(recent_starches) >= 2 and starch == recent_starches[-2]:
             penalty += 1.1
-        penalty += recent_starches.count(starch) * 0.85
+        # Oplopend: de derde pasta in een week kost fors meer dan de tweede.
+        herhalingen = recent_starches.count(starch)
+        penalty += herhalingen * 1.8 + max(0, herhalingen - 1) * 3.0
+
+    # Hoofdgroente, zodat je geen week lang bloemkool eet ook al wisselt de rest.
+    vegetable = _vegetable_key(recipe)
+    recent_vegetables = [_vegetable_key(item) for item in recent_recipes]
+    if vegetable != "none":
+        herhalingen = recent_vegetables.count(vegetable)
+        if herhalingen:
+            penalty += herhalingen * 2.2 + max(0, herhalingen - 1) * 2.5
 
     if recent_recipes:
         last_recipe = recent_recipes[-1]
@@ -218,6 +288,49 @@ def _variety_penalty(recipe, recent_recipes):
     return penalty
 
 
+# Richtwaarde voor een avondmaal per persoon. De planner mikt op dit gemiddelde
+# over de hele periode, niet per dag: een uitschieter mag, zolang andere dagen
+# lichter zijn.
+DOEL_KCAL_PER_PORTIE = 700
+KCAL_STRAF_PER_100 = 0.9
+
+
+def _recipe_kcal(recipe):
+    try:
+        return float((recipe.get("nutrition") or {}).get("calories") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _kcal_penalty(recipe, verbruikt, dagen_gepland, totaal_dagen, doel=DOEL_KCAL_PER_PORTIE):
+    """Straft gerechten die het weekgemiddelde uit balans trekken.
+
+    Het budget is `doel * totaal_dagen`. Wat er nog over is, gedeeld door de
+    resterende dagen, is de ruimte voor vandaag. Een gerecht dat daar ruim
+    boven zit krijgt een oplopende straf; eronder blijven kost niets. Zo volgt
+    er vanzelf een lichtere dag na een zware, zonder harde regels.
+    """
+    kcal = _recipe_kcal(recipe)
+    if kcal <= 0 or totaal_dagen <= 0:
+        return 0.0
+
+    resterend = max(1, totaal_dagen - dagen_gepland)
+    ruimte = (doel * totaal_dagen - verbruikt) / resterend
+    overschot = kcal - ruimte
+    if overschot <= 0:
+        return 0.0
+    return (overschot / 100.0) * KCAL_STRAF_PER_100
+
+
+# Hoeveel dagen er minstens tussen twee keer hetzelfde gerecht zitten.
+ROTATION_PERIOD_DAYS = {
+    "1_per_week": 7,
+    "1_per_2_weeks": 14,
+    "1_per_month": 30,
+    "1_per_2_months": 60,
+}
+
+
 def _max_occurrences(recipe, day_count):
     rotation = (recipe.get("rotation_limit") or "").lower().strip()
     if not rotation:
@@ -227,13 +340,11 @@ def _max_occurrences(recipe, day_count):
             # External AI meals should be rotated aggressively to keep variety high.
             return min(day_count, max(1, int((day_count + 6) // 7)))
         return min(day_count, max(1, int((day_count + 4) // 5)))
-    if rotation == "2_per_week":
-        return min(day_count, max(1, int((day_count * 2 + 6) // 7)))
-    if rotation == "1_per_week":
-        return min(day_count, max(1, int((day_count + 6) // 7)))
-    if rotation == "1_per_month":
-        return max(1, int((day_count + 29) // 30))
-    return None
+    period = ROTATION_PERIOD_DAYS.get(rotation)
+    if period is None:
+        return None
+    # Naar boven afronden: in een periode van 10 dagen mag een weekgerecht 2x.
+    return max(1, int((day_count + period - 1) // period))
 
 
 def _blocked_by_neighbors(recipe, prev_recipe=None, next_recipe=None):
@@ -332,6 +443,10 @@ def generate_plan(cook_days, settings, options, allergies_override=None, custom_
     plan = []
     used = {}
     fish_count = 0
+    # Loopt mee met de kcal die de week tot nu toe verbruikt heeft, zodat na een
+    # zware dag lichtere gerechten voorgaan.
+    verbruikte_kcal = 0.0
+    doel_kcal = float(settings.get("nutrition", {}).get("target_kcal_per_serving") or DOEL_KCAL_PER_PORTIE)
 
     custom_pool = [r for r in ranked if str(r.get("id", "")).startswith("custom_")]
     min_fish = options.get("min_fish", settings["nutrition"].get("weekly_min_fish", 0))
@@ -362,7 +477,13 @@ def generate_plan(cook_days, settings, options, allergies_override=None, custom_
                     continue
                 rating = max(1, min(5, int(recipe.get("rating") or 3)))
                 repeat_penalty = used.get(recipe["id"], 0) * max(1.15, 2.85 - (rating * 0.3))
-                score = _recipe_score(recipe, settings, options) - repeat_penalty - _variety_penalty(recipe, recent_recipes) + random.uniform(-0.3, 1.0)
+                score = (
+                    _recipe_score(recipe, settings, options)
+                    - repeat_penalty
+                    - _variety_penalty(recipe, recent_recipes)
+                    - _kcal_penalty(recipe, verbruikte_kcal, day_idx, len(cook_days), doel_kcal)
+                    + random.uniform(-0.3, 1.0)
+                )
                 if _has_tag(recipe, "heavy"):
                     score += 0.9 if _day_is_weekend(day) else -0.45
                 if score > best_custom_score:
@@ -382,7 +503,13 @@ def generate_plan(cook_days, settings, options, allergies_override=None, custom_
 
             rating = max(1, min(5, int(recipe.get("rating") or 3)))
             repeat_penalty = used.get(recipe["id"], 0) * max(1.2, 2.9 - (rating * 0.3))
-            score = _recipe_score(recipe, settings, options) - repeat_penalty - _variety_penalty(recipe, recent_recipes) + random.uniform(-0.6, 0.6)
+            score = (
+                _recipe_score(recipe, settings, options)
+                - repeat_penalty
+                - _variety_penalty(recipe, recent_recipes)
+                - _kcal_penalty(recipe, verbruikte_kcal, day_idx, len(cook_days), doel_kcal)
+                + random.uniform(-0.6, 0.6)
+            )
 
             if _has_tag(recipe, "heavy"):
                 score += 0.9 if _day_is_weekend(day) else -0.45
@@ -405,6 +532,10 @@ def generate_plan(cook_days, settings, options, allergies_override=None, custom_
 
         plan.append({"date": day, "meal_id": best["id"], "meal_name": best["name"]})
         used[best["id"]] = used.get(best["id"], 0) + 1
+        # Een gerecht zonder schatting telt als de richtwaarde. Anders zou het
+        # geen budget verbruiken en zouden juist die gerechten voorgetrokken
+        # worden omdat ze "gratis" lijken.
+        verbruikte_kcal += _recipe_kcal(best) or doel_kcal
         if _has_tag(best, "fish"):
             fish_count += 1
 

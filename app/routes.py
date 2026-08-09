@@ -1,5 +1,6 @@
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -16,9 +17,23 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
-from .admin_ai import get_admin_ai_config, get_ai_menu_recipes, save_admin_ai_config
+from .admin_ai import (
+    ALLOWED_ROTATION_LIMITS,
+    LEGACY_ROTATION_LIMITS,
+    get_admin_ai_config,
+    get_ai_menu_recipes,
+    save_admin_ai_config,
+)
 from .logging_setup import get_logger
+from .nutrition import bereken_kcal, tabel_uit_database
+from .tagging import verrijk
+from .recipe_import import MAX_PER_IMPORT, ImportFout, importeer_van_url
 from .db import (
+    COURSES,
+    DEFAULT_COURSE,
+    DEFAULT_SERVINGS,
+    MAX_SERVINGS,
+    MIN_SERVINGS,
     add_shopping_item,
     clear_day_meals_between,
     clear_failed_logins,
@@ -312,11 +327,25 @@ def _external_ai_recipes_for_mode(user_email, planner_context=None):
     return []
 
 
+def alleen_hoofdgerechten(recipes):
+    """Houdt alleen hoofdgerechten over.
+
+    De planner vult avondmalen in; een dessert of voorgerecht als enige gerecht
+    van de dag slaat nergens op. Recepten zonder gang (basisrecepten, oudere
+    AI-maaltijden) tellen als hoofdgerecht.
+    """
+    return [
+        recipe
+        for recipe in recipes or []
+        if str((recipe or {}).get("course") or DEFAULT_COURSE).strip().lower() == DEFAULT_COURSE
+    ]
+
+
 def _extra_recipes_for_mode(user_email, planner_context=None):
     mode, _ = _effective_menu_mode(user_email)
     custom = [] if mode == "ai_only" else _custom_recipes_for_user(user_email)
     external = [] if mode == "custom_only" else _external_ai_recipes_for_mode(user_email, planner_context)
-    return custom + external
+    return alleen_hoofdgerechten(custom + external)
 
 
 def _include_base_recipes_for_mode(user_email):
@@ -473,8 +502,51 @@ def _normalize_unit(quantity, unit):
     return qty, raw
 
 
+def _vul_calorieen_aan(maaltijd):
+    """Schat de kcal per portie als het recept zelf geen waarde meegaf.
+
+    Een eigen ingevulde waarde blijft staan; alleen een lege of nul-waarde wordt
+    aangevuld. Bij te lage dekking (te veel onbekende ingredienten) laten we het
+    veld leeg in plaats van een misleidend getal te tonen.
+    """
+    if float(maaltijd.get("calories") or 0) > 0:
+        return maaltijd
+    kcal, dekking = bereken_kcal(maaltijd, *tabel_uit_database())
+    if kcal > 0 and dekking >= 0.6:
+        maaltijd["calories"] = float(kcal)
+    return maaltijd
+
+
+def _source_label(recipe):
+    """Korte naam van de bron voor de pill: 'dagelijksekost', 'joshuaweissman', 'custom'.
+
+    Zelfde regel als sourceLabel() in static/recipe-view.js; die twee horen
+    hetzelfde te tonen.
+    """
+    ruw = str((recipe or {}).get("source_url") or "").strip()
+    if not ruw:
+        return "custom"
+    host = urlsplit(ruw).hostname or ""
+    host = host.lower().removeprefix("www.")
+    return host.split(".")[0] or "custom"
+
+
+def _recipe_servings(recipe, fallback=DEFAULT_SERVINGS):
+    """Voor hoeveel personen de hoeveelheden van dit recept gelden.
+
+    Eigen maaltijden leggen dit zelf vast; basisrecepten en oudere AI-maaltijden
+    hebben het veld niet en vallen terug op de standaard.
+    """
+    try:
+        value = int((recipe or {}).get("servings") or 0)
+    except (TypeError, ValueError):
+        return fallback
+    if value < MIN_SERVINGS or value > MAX_SERVINGS:
+        return fallback
+    return value
+
+
 def _build_shopping_items(user_email, group_id, dates, person_count, base_servings):
-    scale = person_count / base_servings
     recipe_map = _recipe_map_for_user(user_email)
     ingredients = {}
 
@@ -486,6 +558,10 @@ def _build_shopping_items(user_email, group_id, dates, person_count, base_servin
         recipe = recipe_map.get(row["meal_id"])
         if not recipe:
             continue
+
+        # Elk recept schaalt vanaf zijn eigen porties: een gerecht voor 4 personen
+        # moet gehalveerd worden als je voor 2 plant, een gerecht voor 2 niet.
+        scale = person_count / _recipe_servings(recipe, base_servings)
 
         for ing in recipe.get("ingredients", []):
             name = _normalize_ingredient_name(ing.get("name", ""))
@@ -672,10 +748,13 @@ def _normalize_custom_meal_payload(payload):
             normalized_preparation.append(token)
 
     rotation_limit = str(payload.get("rotation_limit") or "1_per_week").strip().lower()
-    allowed_rotation_limits = {"2_per_week", "1_per_week", "1_per_month"}
-    if rotation_limit not in allowed_rotation_limits:
+    rotation_limit = LEGACY_ROTATION_LIMITS.get(rotation_limit, rotation_limit)
+    if rotation_limit not in ALLOWED_ROTATION_LIMITS:
         rotation_limit = "1_per_week"
     rating = _parse_int(payload.get("rating"), default=3, min_value=1, max_value=5)
+    servings = _parse_int(
+        payload.get("servings"), default=DEFAULT_SERVINGS, min_value=MIN_SERVINGS, max_value=MAX_SERVINGS
+    )
 
     nutrition_payload = payload.get("nutrition") or {}
     normalized = {
@@ -688,6 +767,9 @@ def _normalize_custom_meal_payload(payload):
         "ingredients": normalized_ingredients,
         "preparation": normalized_preparation,
         "rotation_limit": rotation_limit,
+        "servings": servings,
+        "source_url": str(payload.get("source_url") or "").strip()[:500],
+        "course": str(payload.get("course") or "").strip().lower(),
         "protein": float(payload.get("protein") if payload.get("protein") is not None else nutrition_payload.get("protein") or 0),
         "carbs": float(payload.get("carbs") if payload.get("carbs") is not None else nutrition_payload.get("carbs") or 0),
         "calories": float(payload.get("calories") if payload.get("calories") is not None else nutrition_payload.get("calories") or 0),
@@ -706,6 +788,9 @@ def _custom_meal_bulk_item(item):
         "allergens": item.get("allergens", []),
         "ingredients": item.get("ingredients", []),
         "preparation": item.get("preparation", []),
+        "servings": item.get("servings", DEFAULT_SERVINGS),
+        "source_url": item.get("source_url", ""),
+        "course": item.get("course", DEFAULT_COURSE),
         "protein": float(nutrition.get("protein") or 0),
         "carbs": float(nutrition.get("carbs") or 0),
         "calories": float(nutrition.get("calories") or 0),
@@ -739,6 +824,9 @@ def _custom_recipes_for_user(user_email):
                 "preparation": item.get("preparation", []),
                 "nutrition": item.get("nutrition", {}),
                 "rotation_limit": item.get("rotation_limit", "1_per_week"),
+                "servings": _recipe_servings(item),
+                "source_url": item.get("source_url", ""),
+                "course": item.get("course", DEFAULT_COURSE),
             }
         )
     return out
@@ -801,7 +889,13 @@ def register_routes(app):
             editable=meal_id.startswith("custom_"),
             meal_image=_meal_image_for_detail(recipe),
             date_label=request.args.get("date", ""),
-            person_count=_parse_int(request.args.get("person_count"), default=2, min_value=1, max_value=8),
+            servings=_recipe_servings(recipe),
+            source_label=_source_label(recipe),
+            course_label={"voorgerecht": "Voorgerecht", "dessert": "Dessert"}.get(
+                (recipe or {}).get("course"), "Hoofdgerecht"
+            ),
+            min_servings=MIN_SERVINGS,
+            max_servings=MAX_SERVINGS,
             steps=_preparation_steps(recipe),
         )
 
@@ -1560,10 +1654,25 @@ def register_routes(app):
 
     @app.put("/api/calendar/<day>")
     def api_calendar_day(day):
+        """Zet de kookstatus van een dag, en optioneel een zelfgekozen maaltijd."""
         user = _require_auth()
         payload = request.get_json(force=True, silent=True) or {}
-        cook = payload.get("cook", True)
-        set_day_cook(user["group_id"], day, _parse_bool(cook))
+
+        if "cook" in payload:
+            set_day_cook(user["group_id"], day, _parse_bool(payload.get("cook", True)))
+
+        if "meal_id" in payload:
+            meal_id = str(payload.get("meal_id") or "").strip()
+            if not meal_id:
+                return jsonify({"error": "meal_id ontbreekt"}), 400
+            recipe = _recipe_map_for_user(user["email"]).get(meal_id)
+            if not recipe:
+                return jsonify({"error": "Onbekend gerecht"}), 404
+            # Zelf kiezen impliceert dat je die dag kookt.
+            set_day_cook(user["group_id"], day, True)
+            set_day_meal(user["group_id"], day, meal_id)
+            return jsonify({"ok": True, "meal_id": meal_id, "meal_name": recipe.get("name", "")})
+
         return jsonify({"ok": True})
 
     @app.post("/api/calendar/<day>/retry")
@@ -1667,6 +1776,53 @@ def register_routes(app):
             created += 1
 
         return jsonify({"ok": True, "created": created, "errors": errors})
+
+    @app.post("/api/custom-meals/import")
+    def api_custom_meals_import():
+        """Importeert recepten van een publieke website.
+
+        Werkt zowel voor één receptpagina als voor een overzichtspagina: in dat
+        tweede geval worden de receptlinks op die pagina afgelopen. De import
+        gebeurt synchroon, dus met een bovengrens op het aantal.
+        """
+        user = _require_auth()
+        payload = request.get_json(force=True, silent=True) or {}
+        url = str(payload.get("url") or "").strip()
+        if not url:
+            return jsonify({"error": "Geef een link op."}), 400
+        limit = _parse_int(payload.get("limit"), default=MAX_PER_IMPORT, min_value=1, max_value=MAX_PER_IMPORT)
+
+        try:
+            meals, import_errors = importeer_van_url(url, limiet=limit)
+        except ImportFout as exc:
+            return jsonify({"error": str(exc)}), 400
+        except Exception:
+            logger.exception("Onverwachte fout bij importeren van %s", url)
+            return jsonify({"error": "Import mislukt door een onverwachte fout."}), 500
+
+        created, skipped = 0, []
+        bestaande = {str(m.get("name", "")).strip().lower() for m in _custom_recipes_for_user(user["email"])}
+        for meal in meals:
+            if str(meal.get("name", "")).strip().lower() in bestaande:
+                skipped.append({"url": meal.get("source_url", ""), "reden": "bestaat al"})
+                continue
+            normalized, error = _normalize_custom_meal_payload(meal)
+            if error:
+                import_errors.append({"url": meal.get("source_url", ""), "reden": error})
+                continue
+            _vul_calorieen_aan(normalized)
+            verrijk(normalized)
+            create_custom_meal(user["email"], normalized)
+            bestaande.add(str(meal.get("name", "")).strip().lower())
+            created += 1
+
+        return jsonify({
+            "ok": True,
+            "created": created,
+            "found": len(meals),
+            "skipped": skipped,
+            "errors": import_errors,
+        })
 
     @app.put("/api/custom-meals/<meal_id>")
     def api_custom_meals_put(meal_id):
