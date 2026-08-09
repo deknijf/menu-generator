@@ -1091,16 +1091,17 @@ function updateProfileMenuModeOptions() {
   select.value = mode;
 
   help.textContent = `Je hebt momenteel ${count} eigen ${count === 1 ? "maaltijd" : "maaltijden"}.`;
-  updateProfilePreferencesHint();
+  updateProfileMenuModeHint();
 }
 
-function updateProfilePreferencesHint() {
+function updateProfileMenuModeHint() {
   const note = document.getElementById("profile-ai-optional-note");
   const select = document.getElementById("profile-menu-mode");
   if (!note || !select) return;
   note.textContent = state.canManageGroupMenuMode
     ? ""
     : "Alleen admin of groep-admin kan deze instelling aanpassen.";
+  note.hidden = !note.textContent;
 
   // De link naar de eigen accountpagina, waar allergieen en smaak staan.
   const link = document.getElementById("profile-own-account-link");
@@ -2449,7 +2450,7 @@ async function boot() {
   document.getElementById("profile-create-group-btn").addEventListener("click", createManagedGroup);
   document.getElementById("profile-rename-group-btn").addEventListener("click", renameManagedGroup);
   document.getElementById("admin-ai-save-btn").addEventListener("click", saveAdminAiSettings);
-  document.getElementById("profile-menu-mode").addEventListener("change", updateProfilePreferencesHint);
+  document.getElementById("profile-menu-mode").addEventListener("change", updateProfileMenuModeHint);
   document.getElementById("cm-save-btn").addEventListener("click", createCustomMeal);
   document.getElementById("cm-delete-btn").addEventListener("click", deleteSelectedCustomMeals);
   document.getElementById("cm-bulk-toggle-btn").addEventListener("click", toggleBulkPanel);

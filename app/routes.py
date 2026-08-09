@@ -236,7 +236,14 @@ def _timezone_from_settings(settings):
 
 
 def _normalize_email_values(values):
-    return _normalize_allergies(values)
+    """Kleine letters, geen dubbels. Bewust niet via _normalize_allergies:
+    die vertaalt voedingstermen, en dat hoort niet met e-mailadressen te gebeuren."""
+    uit = []
+    for waarde in values or []:
+        token = str(waarde).strip().lower()
+        if token and token not in uit:
+            uit.append(token)
+    return uit
 
 
 def _lees_lijst(waarde):
@@ -1534,9 +1541,15 @@ def register_routes(app):
         if not _can_manage_group_users(user, settings):
             if not eigen_pagina:
                 return jsonify({"error": "Niet toegestaan"}), 403
-            # Zonder beheerdersrol mag je wel je eigen smaak en wachtwoord
-            # aanpassen, maar niet je rol of groep: dat zou een rechtenverhoging zijn.
+            # Zonder beheerdersrol mag je je eigen naam, wachtwoord en smaak
+            # aanpassen, maar niet je rol, groep of e-mailadres: het eerste zou
+            # een rechtenverhoging zijn, het tweede je aanmelding veranderen.
             payload = request.get_json(force=True, silent=True) or {}
+            eigen_naam = str(payload.get("name") or "").strip()
+            if eigen_naam and eigen_naam != (target.get("name") or ""):
+                ok_naam, _ = update_auth_user_identity(current_email, current_email, eigen_naam)
+                if not ok_naam:
+                    return jsonify({"error": "Naam opslaan mislukt."}), 400
             eigen_wachtwoord = str(payload.get("password") or "")
             if eigen_wachtwoord:
                 if len(eigen_wachtwoord) < 8:
@@ -1587,6 +1600,12 @@ def register_routes(app):
             return jsonify({"error": "Naam/e-mail opslaan mislukt."}), 400
 
         target_email = next_email
+        # Bewerk je je eigen account en verandert je e-mailadres, dan wijst de
+        # sessie naar een account dat niet meer bestaat en lig je er bij het
+        # volgende verzoek uit. De groep-endpoint doet dit al net zo.
+        if current_email == str(user.get("email") or "").strip().lower() and target_email != current_email:
+            user["email"] = target_email
+            session["user"] = user
         set_auth_user_group(target_email, requested_group_id)
 
         if next_role == "admin":

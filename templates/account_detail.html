@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Gebruiker bewerken</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
-  <link rel="stylesheet" href="/static/styles.css?v=20260809v5" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260809v6" />
 </head>
 <body class="shopping-history-page">
   <div class="app-layout">
@@ -61,7 +61,8 @@
             <input id="account-name" type="text" value="{{ target.name }}" />
           </label>
           <label>E-mail
-            <input id="account-email" type="email" value="{{ target.email }}" />
+            <input id="account-email" type="email" value="{{ target.email }}"
+                   {% if not can_manage_account %}readonly title="Je aanmeldadres wijzigt een admin voor je"{% endif %} />
           </label>
           {% if can_manage_account %}
           <label>Rol
@@ -119,7 +120,7 @@
       </section>
     </main>
   </div>
-  <script src="/static/chip-input.js?v=20260809v5"></script>
+  <script src="/static/chip-input.js?v=20260809v6"></script>
   <script>
     (function () {
       const form = document.getElementById("account-detail-form");

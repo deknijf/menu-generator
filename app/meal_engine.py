@@ -5,6 +5,7 @@ from datetime import datetime
 import re
 
 from .food_matching import bevat as _bevat_ingredient
+from .food_matching import maak_hooiberg as _hooiberg_van
 
 # Wat je niet lust hoort zeldzaam te zijn, niet onmogelijk: af en toe eens iets
 # met paddenstoelen houdt de planning gevarieerd zonder dat het een gewoonte wordt.
@@ -76,16 +77,23 @@ def _recipe_score(recipe, settings, options):
 
     score = 0.0
 
-    for tag in recipe.get("tags", []):
-        if tag in likes:
-            if tag == "vis" and not options.get("prefer_fish"):
-                score += 0.2
-            else:
-                score += 2.0
-        if tag in dislikes:
+    # Voorkeuren worden op dezelfde manier herkend als allergieen: wie "kip" als
+    # favoriet opgeeft, bedoelt ook kipfilet, en wie "paddenstoelen" niet lust
+    # bedoelt ook shiitake. Een vergelijking op exacte tags miste dat.
+    tekst = _hooiberg_van(recipe) if likes or dislikes else ""
+    for voorkeur in likes:
+        if not _bevat_ingredient(recipe, voorkeur, tekst):
+            continue
+        # Vis is een uitzondering: dat wordt pas een echte plus als je er
+        # deze week ook om vraagt, anders zwemt de hele week in de vis.
+        score += 0.2 if voorkeur == "vis" and not options.get("prefer_fish") else 2.0
+
+    for afkeer in dislikes:
+        if _bevat_ingredient(recipe, afkeer, tekst):
             score -= 2.0
-        if tag == "favoriet":
-            score += 1.25
+
+    if _has_tag(recipe, "favoriet"):
+        score += 1.25
 
     # Ontbrekende voedingswaarden zijn onbekend, niet nul. Zonder deze terugval
     # scoort elk geimporteerd recept (protein 0) structureel lager dan een
@@ -370,45 +378,14 @@ def _normalize_token(value):
     return str(value or "").strip().lower()
 
 
-def _expand_allergy_tokens(token):
-    base = _normalize_token(token)
-    if not base:
-        return set()
-
-    expanded = {base}
-    citrus_aliases = {
-        "citroen",
-        "citroensap",
-        "citroenzeste",
-        "lemon",
-        "lemon juice",
-        "lemon zest",
-        "limoen",
-        "limoensap",
-        "limoenzeste",
-        "lime",
-        "lime juice",
-        "lime zest",
-    }
-
-    if base in citrus_aliases:
-        expanded.update(citrus_aliases)
-    return expanded
-
-
 def _recipe_contains_allergy(recipe, allergy):
-    tokens = _expand_allergy_tokens(allergy)
-    if not tokens:
-        return False
+    """True als het recept dit allergeen bevat, in welke schrijfwijze ook.
 
-    # 1) Expliciete allergeenlabels op het recept.
-    recipe_allergens = {_normalize_token(a) for a in recipe.get("allergens", [])}
-    if tokens.intersection(recipe_allergens):
-        return True
-
-    # 2) Naam, tags en ingredienten, met synoniemen en samenstellingen. Zo vindt
-    # "paddenstoelen" ook shiitake, en "ui" ook ajuin.
-    return any(_bevat_ingredient(recipe, token) for token in tokens)
+    De herkenning zelf zit in food_matching: die kent de synoniemen, de
+    Nederlandse samenstellingen en de EU-allergenen. Hier blijft alleen de
+    vraagstelling over.
+    """
+    return _bevat_ingredient(recipe, allergy)
 
 
 def _is_allowed(recipe, settings, allergies_override=None):
@@ -423,7 +400,11 @@ def _is_allowed(recipe, settings, allergies_override=None):
 
 def bevat_afkeer(recipe, dislikes):
     """True als het recept iets bevat dat deze huishouding niet lust."""
-    return any(_bevat_ingredient(recipe, term) for term in dislikes or [] if _normalize_token(term))
+    termen = [t for t in dislikes or [] if _normalize_token(t)]
+    if not termen:
+        return False
+    tekst = _hooiberg_van(recipe)
+    return any(_bevat_ingredient(recipe, term, tekst) for term in termen)
 
 
 def _filter_afkeer(recipes, dislikes, kans=KANS_NIET_LEKKER):

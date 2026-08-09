@@ -76,9 +76,21 @@ app/db.py          (~54KB)  Álle SQLite-toegang. 68 functies, 15 tabellen.
 app/routes.py      (~79KB)  Álle HTTP. Module-level `_helpers` + één register_routes(app).
 app/meal_engine.py          Pure planningslogica: scoring, variatie, rotatie, allergieën.
 app/admin_ai.py             OpenRouter-integratie, de enige AI-bron.
+app/recipe_import.py        Import van publieke receptensites (recipe-scrapers +
+                            schema.org). Respecteert robots.txt.
+app/nutrition.py            Schat kcal per portie uit de ingrediënten.
+app/tagging.py              Leidt tags en allergenen af; bevat ook de vertaaltabel
+                            Engels → Nederlands (zie §Taal).
+app/food_matching.py        Herkent of een recept een ingrediënt bevat, met
+                            synoniemen en Nederlandse samenstellingen.
+app/units.py                Imperiaal → metrisch.
 app/logging_setup.py        Eén stdout-handler; logs gaan naar journalctl.
 app/recipes.json            10 vaste basisrecepten.
 static/app.js      (~78KB)  Eén bestand, vanilla JS, globaal `state`-object bovenaan.
+static/recipe-view.js       Gedeeld tussen overzicht en detailpagina: ingrediënten-
+                            tabel, stappen, portiestepper.
+static/chip-input.js        Tekstveld waarin een komma een pill maakt. Gebruikt op
+                            de accountpagina.
 static/styles.css           Eén bestand.
 static/sw.js                Service worker. Wordt via /sw.js geserveerd, niet
                             via /static/, want anders is de scope te smal.
@@ -210,17 +222,44 @@ Opties: `high_protein`, `low_carb`, `prefer_fish`, `person_count` (1–8).
 - `_variety_penalty()` — straft herhaling van hetzelfde gerecht, dezelfde eiwitbron
   (`_primary_protein_key`) en hetzelfde zetmeel (`_starch_key`) binnen de laatste 6 dagen.
   Dit is wat "gevarieerd menu" concreet betekent; wijzig de gewichten niet zonder reden.
-- `_max_occurrences()` — respecteert `rotation_limit` (`2_per_week` / `1_per_week` /
-  `1_per_month`).
+- `_max_occurrences()` — respecteert `rotation_limit`: `1_per_week`, `1_per_2_weeks`,
+  `1_per_month` of `1_per_2_months`. De periodes staan in `ROTATION_PERIOD_DAYS`.
 - `_is_allowed()` — harde filter op allergieën. Nooit omzeilen.
+- `_filter_afkeer()` — haalt eruit wat de groep niet lust, op een enkele uitzondering na.
 - Een random-component zorgt dat twee generaties niet identiek zijn. Tests moeten daar
   rekening mee houden (seed of assert op eigenschappen, niet op exacte output).
 
 ### Allergieën en voorkeuren
 
-`_effective_allergies()` voegt de familie-allergieën uit `settings["family"]` samen met
-de persoonlijke uit de DB. Allergieën zijn een **harde** uitsluiting; likes en dislikes
-sturen enkel de score bij.
+Elke gebruiker vult op **zijn eigen accountpagina** (`/account/<email>`) in wat hij niet
+lekker vindt, waarvoor hij allergisch is en wat hij graag eet. Die pagina staat open voor
+iedereen voor het eigen account; rol, groep en e-mailadres blijven voor beheerders.
+
+`_effective_allergies()` en `_effective_dislikes()` tellen de familie-instellingen uit
+`settings["family"]` op bij die van **alle leden van de groep**. Er wordt voor het gezin
+gekookt, dus wat een huisgenoot niet verdraagt komt ook niet op tafel als jij het plan
+aanmaakt.
+
+De drie wegen verschillen in hardheid:
+
+- **Allergieën** sluiten een recept volledig uit (`_is_allowed()`). Nooit omzeilen.
+- **Afkeur** haalt een recept uit de kandidaten, met `KANS_NIET_LEKKER` (7%) kans dat het
+  er toch doorglipt — zelden is niet hetzelfde als nooit. Blijft er niets over, dan gaat
+  de planning voor. Daarnaast nog een aftrek in de score.
+- **Favorieten** geven een plus in de score.
+
+Alle drie gebruiken `food_matching.bevat()`, zodat "paddenstoelen" ook shiitake vindt en
+"kip" ook kipfilet. Overkoepelende termen breiden uit naar hun soorten, soortnamen niet
+terug naar hun groep: wie zalm niet lust, weert daarmee geen kabeljauw. Citrus is de
+bewuste uitzondering die in beide richtingen werkt.
+
+### Taal
+
+De app is Nederlandstalig: tags, allergenen, voorkeuren en alles op het scherm. Uit een
+eerdere versie staat er nog Engels in de database, dus `tagging.vernederlands()` vertaalt
+bij het lezen en schrijven (`chicken` → kip, `soya` → soja). `meal_engine._TAG_ALIASSEN`
+en `_cuisine_bias()` kennen de Engelse namen nog als ingang. Nieuwe termen horen
+Nederlands te zijn.
 
 ### Calorieën per portie
 
@@ -455,6 +494,16 @@ pytest -m "not live"
   `data/app.db` niet aangeraakt wordt.
 - `tests/test_templates.py` — statische checks op de templates: zoom niet geblokkeerd,
   cache-busting aanwezig en gelijk, geen hardcoded e-mailadressen.
+- `tests/test_auth.py` — inlogpogingen, throttle, rollen.
+- `tests/test_nutrition.py` — kcal-schatting; vooral de misrekeningen die er ooit in
+  zaten (de eenheid `gr`, grote getallen zonder eenheid, frituurolie).
+- `tests/test_tagging.py` — tags en allergenen uit naam en ingrediënten.
+- `tests/test_food_matching.py` — synoniemen, samenstellingen, en dat korte woorden
+  niet midden in een ander woord aanslaan.
+- `tests/test_vertaling.py` — Engels → Nederlands, en de vis-in-samenstelling-regel.
+- `tests/test_voorkeuren_opslaan.py` — een ontbrekend veld betekent "niet aangeraakt",
+  niet "leeggemaakt". Zonder die regel wist het profielscherm iemands allergieën.
+- `tests/test_recipe_import.py` — parsen van schema.org en van de Dagelijkse Kost-payload.
 
 **Smoke test** — Playwright tegen een draaiende app, read-only:
 

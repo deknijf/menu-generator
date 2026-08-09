@@ -31,6 +31,11 @@ SYNONIEMEN = [
     {"selderij", "selder", "celery"},
     {"mosterd", "mustard"},
     {"sesam", "sesame"},
+    # Citrus is de uitzondering op de regel hieronder dat een soortnaam bij
+    # zichzelf blijft: wie citroen niet verdraagt, verdraagt limoen doorgaans
+    # evenmin. Daarom werkt deze groep wel in beide richtingen.
+    {"citrus", "citroen", "citroensap", "citroenzeste", "lemon",
+     "limoen", "limoensap", "limoenzeste", "lime"},
     {"paddenstoel", "paddestoel"},
     {"ui", "ajuin"},
     {"witloof", "witlof", "chicon"},
@@ -119,7 +124,12 @@ def _past_in_tekst(token, tekst):
     return re.search(rf"{voorkant}{re.escape(token)}{achterkant}(?![a-z])", tekst) is not None
 
 
-def _hooiberg(recept):
+def maak_hooiberg(recept):
+    """De doorzoekbare tekst van een recept: naam, tags en ingredienten.
+
+    Wie meerdere termen tegen hetzelfde recept houdt, bouwt dit beter een keer
+    en geeft het mee aan `bevat`. Bij het plannen scheelt dat een factor drie.
+    """
     delen = [normaliseer(recept.get("name", ""))]
     delen.extend(normaliseer(tag) for tag in recept.get("tags") or [])
     for ingredient in recept.get("ingredients") or []:
@@ -127,7 +137,7 @@ def _hooiberg(recept):
     return " ".join(deel for deel in delen if deel)
 
 
-def bevat(recept, term):
+def bevat(recept, term, tekst=None):
     """True als het recept deze term bevat, in welke gedaante ook."""
     token = normaliseer(term)
     if not token:
@@ -138,7 +148,7 @@ def bevat(recept, term):
     if token in labels:
         return True
 
-    tekst = _hooiberg(recept)
+    tekst = maak_hooiberg(recept) if tekst is None else tekst
     if not tekst:
         return False
 
