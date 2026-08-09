@@ -16,7 +16,7 @@ als bij het labelen van een recept.
 
 import re
 
-from .tagging import _ALLERGEEN_REGELS
+from .tagging import _ALLERGEEN_REGELS, vernederlands
 
 # Zelfde zaak, andere naam. Wederzijds uitwisselbaar.
 SYNONIEMEN = [
@@ -75,7 +75,8 @@ _ALLERGEEN_PATRONEN = dict(_ALLERGEEN_REGELS)
 def normaliseer(term):
     """Kleine letters, geen dubbele spaties, meervoud eraf waar dat veilig kan."""
     token = re.sub(r"\s+", " ", str(term or "").strip().lower())
-    return token
+    # "soya" en "chicken" komen nog uit oudere profielen.
+    return vernederlands(token)
 
 
 def _synoniemen_van(token):

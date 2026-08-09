@@ -26,30 +26,31 @@ def _cuisine_bias(recipe, settings):
         text_parts.append(str(ingredient.get("name", "")).lower())
     text = " ".join(part for part in text_parts if part)
 
+    # De Engelse namen blijven staan voor recepten uit een oudere versie.
     west_markers = {
-        "west-europe",
-        "belgian",
-        "dutch",
-        "french",
-        "german",
-        "british",
-        "irish",
-        "mediterranean",
-        "italian",
-        "spanish",
-        "portuguese",
-        "greek",
+        "west-europees", "west-europe",
+        "belgisch", "belgian",
+        "nederlands", "dutch",
+        "frans", "french",
+        "duits", "german",
+        "brits", "british",
+        "iers", "irish",
+        "mediterraans", "mediterranean",
+        "italiaans", "italian",
+        "spaans", "spanish",
+        "portugees", "portuguese",
+        "grieks", "greek",
     }
     asian_markers = {
-        "asian",
-        "thai",
-        "vietnamese",
-        "japanese",
-        "korean",
-        "chinese",
-        "indian",
-        "indonesian",
-        "malaysian",
+        "aziatisch", "asian",
+        "thais", "thai",
+        "vietnamees", "vietnamese",
+        "japans", "japanese",
+        "koreaans", "korean",
+        "chinees", "chinese",
+        "indisch", "indian",
+        "indonesisch", "indonesian",
+        "maleisisch", "malaysian",
     }
 
     score = 0.0
@@ -77,13 +78,13 @@ def _recipe_score(recipe, settings, options):
 
     for tag in recipe.get("tags", []):
         if tag in likes:
-            if tag == "fish" and not options.get("prefer_fish"):
+            if tag == "vis" and not options.get("prefer_fish"):
                 score += 0.2
             else:
                 score += 2.0
         if tag in dislikes:
             score -= 2.0
-        if tag == "favorite":
+        if tag == "favoriet":
             score += 1.25
 
     # Ontbrekende voedingswaarden zijn onbekend, niet nul. Zonder deze terugval
@@ -109,7 +110,7 @@ def _recipe_score(recipe, settings, options):
     elif carbs > 55:
         score -= 0.25
 
-    if options.get("prefer_fish") and "fish" in recipe.get("tags", []):
+    if options.get("prefer_fish") and _has_tag(recipe, "vis"):
         score += 1.5
 
     score += _cuisine_bias(recipe, settings)
@@ -131,17 +132,17 @@ def _day_is_weekend(day_iso):
     return weekday in {4, 5, 6}  # Friday/Saturday/Sunday
 
 
-# De tags zijn Nederlands sinds ze automatisch afgeleid worden, maar de
-# scoringslogica hieronder vraagt van oudsher naar de Engelse namen. Deze aliassen
-# houden beide werkend; zonder dit stopte de vis-op-vis-regel stil met werken.
+# Nederlands is de norm. De Engelse varianten staan erbij voor recepten en
+# voorkeuren die nog uit een oudere versie komen; zonder die ingang stopte de
+# vis-op-vis-regel stil met werken.
 _TAG_ALIASSEN = {
-    "fish": ("fish", "vis", "zalm", "kabeljauw", "tonijn"),
-    "heavy": ("heavy", "zwaar"),
+    "vis": ("vis", "fish", "zalm", "kabeljauw", "tonijn"),
+    "zwaar": ("zwaar", "heavy"),
     "pasta": ("pasta", "spaghetti"),
-    "chicken": ("chicken", "kip", "gevogelte"),
-    "beef": ("beef", "rund"),
-    "vegetarian": ("vegetarian", "vegetarisch"),
-    "favorite": ("favorite", "favoriet"),
+    "kip": ("kip", "chicken", "gevogelte", "kalkoen"),
+    "rund": ("rund", "beef"),
+    "vegetarisch": ("vegetarisch", "vegetarian"),
+    "favoriet": ("favoriet", "favorite"),
 }
 
 
@@ -165,14 +166,14 @@ def _primary_protein_key(recipe):
     text = " ".join(part for part in text_parts if part)
 
     protein_markers = [
-        ("fish", ["fish", "vis", "zalm", "kabeljauw", "tonijn", "salmon", "cod", "tuna"]),
-        ("chicken", ["kip", "chicken", "kalkoen", "turkey"]),
-        ("beef", ["rund", "beef", "gehakt", "steak", "hamburger", "bolognese"]),
-        ("pork", ["varken", "pork", "ham", "spek", "bacon", "worst", "sausage"]),
-        ("shellfish", ["garnaal", "garnalen", "shrimp", "prawn", "scampi"]),
-        ("legume", ["linzen", "lentil", "kikkererwt", "chickpea", "bonen", "beans"]),
-        ("egg", ["ei", "egg", "omelet", "frittata"]),
-        ("cheese", ["kaas", "cheese", "halloumi", "mozzarella", "feta"]),
+        ("vis", ["fish", "vis", "zalm", "kabeljauw", "tonijn", "salmon", "cod", "tuna"]),
+        ("kip", ["kip", "chicken", "kalkoen", "turkey"]),
+        ("rund", ["rund", "beef", "gehakt", "steak", "hamburger", "bolognese"]),
+        ("varken", ["varken", "pork", "ham", "spek", "bacon", "worst", "sausage"]),
+        ("schaaldieren", ["garnaal", "garnalen", "shrimp", "prawn", "scampi"]),
+        ("peulvrucht", ["linzen", "lentil", "kikkererwt", "chickpea", "bonen", "beans"]),
+        ("ei", ["ei", "egg", "omelet", "frittata"]),
+        ("kaas", ["kaas", "cheese", "halloumi", "mozzarella", "feta"]),
     ]
     for key, markers in protein_markers:
         if key in tags or any(marker in text for marker in markers):
@@ -189,10 +190,10 @@ def _starch_key(recipe):
 
     starch_markers = [
         ("pasta", ["pasta", "spaghetti", "tagliatelle", "penne", "fusilli", "lasagne"]),
-        ("rice", ["rijst", "rice", "risotto"]),
-        ("potato", ["aardappel", "aardappelen", "krieltjes", "patat", "potato"]),
-        ("bread", ["brood", "wrap", "toast", "baguette"]),
-        ("grain", ["quinoa", "couscous", "bulgur"]),
+        ("rijst", ["rijst", "rice", "risotto"]),
+        ("aardappel", ["aardappel", "aardappelen", "krieltjes", "patat", "potato"]),
+        ("brood", ["brood", "wrap", "toast", "baguette"]),
+        ("graan", ["quinoa", "couscous", "bulgur"]),
     ]
     for key, markers in starch_markers:
         if key in tags or any(marker in text for marker in markers):
@@ -286,9 +287,9 @@ def _variety_penalty(recipe, recent_recipes):
 
     if recent_recipes:
         last_recipe = recent_recipes[-1]
-        if _has_tag(last_recipe, "heavy") and _has_tag(recipe, "heavy"):
+        if _has_tag(last_recipe, "zwaar") and _has_tag(recipe, "zwaar"):
             penalty += 1.3
-        if _has_tag(last_recipe, "fish") and _has_tag(recipe, "fish"):
+        if _has_tag(last_recipe, "vis") and _has_tag(recipe, "vis"):
             penalty += 1.6
 
     return penalty
@@ -354,9 +355,9 @@ def _max_occurrences(recipe, day_count):
 
 
 def _blocked_by_neighbors(recipe, prev_recipe=None, next_recipe=None):
-    if prev_recipe is not None and _has_tag(prev_recipe, "fish") and _has_tag(recipe, "fish"):
+    if prev_recipe is not None and _has_tag(prev_recipe, "vis") and _has_tag(recipe, "vis"):
         return True
-    if next_recipe is not None and _has_tag(next_recipe, "fish") and _has_tag(recipe, "fish"):
+    if next_recipe is not None and _has_tag(next_recipe, "vis") and _has_tag(recipe, "vis"):
         return True
     if prev_recipe is not None and _is_pasta_like(prev_recipe) and _is_pasta_like(recipe):
         return True
@@ -506,7 +507,7 @@ def generate_plan(
                     - _kcal_penalty(recipe, verbruikte_kcal, day_idx, len(cook_days), doel_kcal)
                     + random.uniform(-0.3, 1.0)
                 )
-                if _has_tag(recipe, "heavy"):
+                if _has_tag(recipe, "zwaar"):
                     score += 0.9 if _day_is_weekend(day) else -0.45
                 if score > best_custom_score:
                     best_custom = recipe
@@ -533,16 +534,16 @@ def generate_plan(
                 + random.uniform(-0.6, 0.6)
             )
 
-            if _has_tag(recipe, "heavy"):
+            if _has_tag(recipe, "zwaar"):
                 score += 0.9 if _day_is_weekend(day) else -0.45
 
-            if min_fish and fish_count < min_fish and _has_tag(recipe, "fish"):
+            if min_fish and fish_count < min_fish and _has_tag(recipe, "vis"):
                 score += 0.8
-            if min_fish and fish_count >= min_fish and _has_tag(recipe, "fish"):
+            if min_fish and fish_count >= min_fish and _has_tag(recipe, "vis"):
                 score -= 0.35
 
             fish_missing = max(min_fish - fish_count, 0)
-            if fish_missing and remaining_days <= fish_missing + 1 and _has_tag(recipe, "fish"):
+            if fish_missing and remaining_days <= fish_missing + 1 and _has_tag(recipe, "vis"):
                 score += 1.1
 
             if score > best_score:
@@ -558,7 +559,7 @@ def generate_plan(
         # geen budget verbruiken en zouden juist die gerechten voorgetrokken
         # worden omdat ze "gratis" lijken.
         verbruikte_kcal += _recipe_kcal(best) or doel_kcal
-        if _has_tag(best, "fish"):
+        if _has_tag(best, "vis"):
             fish_count += 1
 
     return sorted(plan, key=lambda item: item["date"])
@@ -619,7 +620,7 @@ def select_best_recipe(
         recent_penalty = max(0.65, 1.5 - (rating * 0.12))
         value -= recent_usage.get(recipe.get("id"), 0) * recent_penalty
         value -= _variety_penalty(recipe, recent_recipes)
-        if _has_tag(recipe, "heavy"):
+        if _has_tag(recipe, "zwaar"):
             if day_iso and _day_is_weekend(day_iso):
                 value += 0.7
             else:

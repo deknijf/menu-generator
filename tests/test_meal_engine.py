@@ -178,10 +178,10 @@ def test_zelfde_eiwitbron_na_elkaar_wordt_bestraft(make_recipe):
 @pytest.mark.parametrize(
     "naam,verwacht",
     [
-        ("Zalm met broccoli", "fish"),
-        ("Kipfilet met rijst", "chicken"),
-        ("Rundstoofpot", "beef"),
-        ("Linzensoep", "legume"),
+        ("Zalm met broccoli", "vis"),
+        ("Kipfilet met rijst", "kip"),
+        ("Rundstoofpot", "rund"),
+        ("Linzensoep", "peulvrucht"),
         ("Iets onherkenbaars", "other"),
     ],
 )
@@ -193,8 +193,8 @@ def test_primary_protein_key(make_recipe, naam, verwacht):
     "naam,verwacht",
     [
         ("Spaghetti bolognaise", "pasta"),
-        ("Risotto met champignons", "rice"),
-        ("Stoofvlees met aardappelen", "potato"),
+        ("Risotto met champignons", "rijst"),
+        ("Stoofvlees met aardappelen", "aardappel"),
         ("Salade zonder bijgerecht", "none"),
     ],
 )

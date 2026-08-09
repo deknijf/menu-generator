@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 from dotenv import dotenv_values, set_key
 
 from .logging_setup import get_logger
+from .tagging import vernederlands_lijst
 
 logger = get_logger(__name__)
 
@@ -29,14 +30,17 @@ ALLOWED_ROTATION_LIMITS = {"1_per_week", "1_per_2_weeks", "1_per_month", "1_per_
 # "2_per_week" bestond vroeger en zit nog in oude caches.
 LEGACY_ROTATION_LIMITS = {"2_per_week": "1_per_week"}
 DEFAULT_SERVINGS = 2
+# De tag links is wat de gebruiker te zien krijgt, dus Nederlands. De woorden
+# rechts zijn alleen herkenningspunten in de recepttekst; die mogen Engels zijn,
+# want een AI-antwoord komt soms half vertaald terug.
 MEAT_TAGS = {
-    "fish": ["fish", "vis", "zalm", "kabeljauw", "tonijn", "salmon", "cod", "tuna"],
-    "chicken": ["kip", "chicken", "kalkoen", "turkey"],
-    "beef": ["rund", "beef", "gehakt", "steak", "hamburger", "bolognese"],
+    "vis": ["fish", "vis", "zalm", "kabeljauw", "tonijn", "salmon", "cod", "tuna"],
+    "kip": ["kip", "chicken", "kalkoen", "turkey"],
+    "rund": ["rund", "beef", "gehakt", "steak", "hamburger", "bolognese"],
     "pasta": ["pasta", "spaghetti", "penne", "tagliatelle", "lasagne"],
-    "rice": ["rijst", "rice", "risotto"],
-    "potato": ["aardappel", "aardappelen", "krieltjes", "patat", "potato"],
-    "west-europe": [
+    "rijst": ["rijst", "rice", "risotto"],
+    "aardappel": ["aardappel", "aardappelen", "krieltjes", "patat", "potato"],
+    "west-europees": [
         "belgisch",
         "nederlands",
         "frans",
@@ -49,13 +53,13 @@ MEAT_TAGS = {
     ],
 }
 ALLERGEN_MARKERS = {
-    "fish": ["fish", "vis", "zalm", "kabeljauw", "tonijn", "salmon", "cod", "tuna"],
+    "vis": ["fish", "vis", "zalm", "kabeljauw", "tonijn", "salmon", "cod", "tuna"],
     "gluten": ["bloem", "pasta", "spaghetti", "brood", "paneermeel", "wrap", "noedels"],
     "lactose": ["melk", "room", "kaas", "boter", "parmezaan", "mozzarella", "yoghurt"],
-    "soy": ["soja", "soy"],
-    "peanut": ["pinda", "peanut"],
-    "shellfish": ["garnaal", "garnalen", "scampi", "mossel", "krab", "kreeft"],
-    "egg": ["ei", "eieren"],
+    "soja": ["soja", "soy"],
+    "pinda": ["pinda", "peanut"],
+    "schaaldieren": ["garnaal", "garnalen", "scampi", "mossel", "krab", "kreeft"],
+    "ei": ["ei", "eieren"],
 }
 
 
@@ -132,11 +136,8 @@ def _safe_float(value, fallback):
 
 
 def _normalize_tags(tags, name, description, ingredients):
-    out = []
-    for tag in tags or []:
-        token = str(tag or "").strip().lower()
-        if token and token not in out:
-            out.append(token)
+    # Een AI-antwoord levert soms Engelse tags, ook al vraagt de prompt Nederlands.
+    out = vernederlands_lijst(tags)
     haystack = " ".join(
         [
             str(name or "").lower(),
@@ -148,16 +149,12 @@ def _normalize_tags(tags, name, description, ingredients):
         if any(marker in haystack for marker in markers) and tag not in out:
             out.append(tag)
     if not out:
-        out.append("balanced")
+        out.append("gebalanceerd")
     return out
 
 
 def _normalize_allergens(allergens, ingredients):
-    out = []
-    for token in allergens or []:
-        value = str(token or "").strip().lower()
-        if value and value not in out:
-            out.append(value)
+    out = vernederlands_lijst(allergens)
     haystack = " ".join(str((ingredient or {}).get("name") or "").lower() for ingredient in ingredients or [])
     for allergen, markers in ALLERGEN_MARKERS.items():
         if allergen not in out and any(marker in haystack for marker in markers):
@@ -330,7 +327,7 @@ Belangrijke regels:
     "servings": 2,
     "rotation_limit": "1_per_week|1_per_2_weeks|1_per_month|1_per_2_months"
   }}
-- Gebruik Nederlandse namen voor gerechten, ingrediënten en stappen.
+- Gebruik Nederlandse namen voor gerechten, ingrediënten, stappen, tags en allergenen.
 - Maak realistische recepten voor een Belgische/Nederlandse supermarkt.
 - Vermijd ingrediënten uit deze allergielijst absoluut: {blocked_text}.
 - Gebruik maximaal 5 volwaardige hoofdingrediënten per recept.

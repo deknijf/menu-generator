@@ -21,6 +21,62 @@ import re
 MIN_TAGS = 6
 MAX_TAGS = 10
 
+# De app is Nederlandstalig, dus tags en allergenen staan in het Nederlands. Uit
+# oudere versies zit er nog Engels in de database en in de basisrecepten; die
+# termen blijven hier staan als ingang, zodat bestaande voorkeuren en recepten
+# blijven werken in plaats van stilletjes niets meer te vinden.
+_UIT_HET_ENGELS = {
+    "asian": "aziatisch",
+    "balanced": "gebalanceerd",
+    "balanced-carb": "gebalanceerd",
+    "beef": "rund",
+    "chicken": "kip",
+    "cod": "kabeljauw",
+    "egg": "ei",
+    "favorite": "favoriet",
+    "fish": "vis",
+    "heavy": "zwaar",
+    "high-protein": "eiwitrijk",
+    "light": "licht",
+    "low-carb": "koolhydraatarm",
+    "mediterranean": "mediterraans",
+    "nuts": "noten",
+    "peanut": "pinda",
+    "pork": "varken",
+    "potato": "aardappel",
+    "rice": "rijst",
+    "salmon": "zalm",
+    "shellfish": "schaaldieren",
+    "soy": "soja",
+    "soya": "soja",
+    "tuna": "tonijn",
+    "turkey": "kalkoen",
+    "vegetarian": "vegetarisch",
+    "west-europe": "west-europees",
+}
+
+
+def vernederlands(waarde):
+    """Geeft de Nederlandse term terug; onbekende woorden blijven zoals ze zijn."""
+    token = str(waarde or "").strip().lower()
+    return _UIT_HET_ENGELS.get(token, token)
+
+
+def vernederlands_lijst(waarden):
+    """Vertaalt een lijst tags of allergenen en houdt de volgorde aan, zonder dubbels."""
+    uit = []
+    for waarde in waarden or []:
+        term = vernederlands(waarde)
+        if term and term not in uit:
+            uit.append(term)
+    return uit
+
+# "Vis" plakt langs twee kanten in samenstellingen: vissoep en visfilet vooraan,
+# schelvis en koolvis achteraan. Beide tellen mee, met twee uitzonderingen.
+# Inktvis is een weekdier en heeft zijn eigen regel; visie, visioen, visite en
+# visueel zijn geen eten en kunnen in een beschrijving staan.
+_VIS_PATROON = r"(?<!inkt)vis\b|\bvis(?!ie|ioen|it|ueel)[a-z]*"
+
 # Volgorde bepaalt de prioriteit bij afkappen: eerst wat een gerecht typeert,
 # daarna de bijrollen. Elke regel is (tag, patronen).
 _INGREDIENT_TAGS = [
@@ -35,6 +91,12 @@ _INGREDIENT_TAGS = [
     ("zalm", r"zalm|salmon"),
     ("kabeljauw", r"kabeljauw|cod\b"),
     ("tonijn", r"tonijn|tuna"),
+    # "vis" als achtervoegsel telt mee: schelvis, koolvis, zwaardvis. Zonder dat
+    # kreeg een schelvisgerecht geen eiwittag en heette het "vegetarisch".
+    # Inktvis valt er bewust buiten: dat is een weekdier en heeft zijn eigen regel.
+    ("vis", _VIS_PATROON + r"|schelvis|heilbot|forel|makreel|haring|ansjovis|"
+            r"pladijs|schol|zeetong|heek|wijting|zeebaars|dorade|tarbot|griet|"
+            r"snoekbaars|pangasius|tilapia|victoriabaars|roodbaars|sardine"),
     ("garnalen", r"garnaal|garnalen|scampi|gamba|shrimp|prawn"),
     ("mosselen", r"mossel|oester|weekdier"),
     ("ei", r"\bei\b|eieren|eidooier|omelet|frittata"),
@@ -79,7 +141,7 @@ _INGREDIENT_TAGS = [
 _CATEGORIE_UIT_TAG = {
     "kip": "gevogelte", "kalkoen": "gevogelte",
     "rund": "vlees", "varken": "vlees", "lam": "vlees", "gehakt": "vlees", "worst": "vlees",
-    "zalm": "vis", "kabeljauw": "vis", "tonijn": "vis",
+    "zalm": "vis", "kabeljauw": "vis", "tonijn": "vis", "vis": "vis",
     "garnalen": "schaaldieren", "mosselen": "schaaldieren",
 }
 
@@ -103,8 +165,10 @@ _ALLERGEEN_REGELS = [
                 r"creme fraiche|mozzarella|feta|parmezaan|pecorino|gruyere|cheddar|"
                 r"provolone|roquefort|ricotta|halloumi|karnemelk|ghee"),
     ("ei", r"\bei\b|eieren|eidooier|eiwit\b|mayonaise|sabayon|omelet|frittata|meringue"),
-    ("vis", r"\bvis\b|zalm|kabeljauw|tonijn|forel|makreel|haring|ansjovis|pladijs|"
-            r"zeetong|heek|koolvis|schol|pangasius|vissaus|worcestershire"),
+    ("vis", _VIS_PATROON + r"|zalm|kabeljauw|tonijn|forel|makreel|haring|ansjovis|pladijs|"
+            r"zeetong|heek|koolvis|schol|pangasius|worcestershire|"
+            r"schelvis|heilbot|wijting|zeebaars|dorade|tarbot|griet|snoekbaars|"
+            r"tilapia|victoriabaars|roodbaars|sardine"),
     ("schaaldieren", r"garnaal|garnalen|scampi|gamba|krab|kreeft|langoustine"),
     ("weekdieren", r"mossel|oester|inktvis|calamari|sint-jakobs|coquille|slak"),
     ("noten", r"amandel|walnoot|hazelnoot|cashew|pistache|pecan|macadamia|notenmix|"

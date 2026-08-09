@@ -26,7 +26,7 @@ from .admin_ai import (
 )
 from .logging_setup import get_logger
 from .nutrition import bereken_kcal, tabel_uit_database
-from .tagging import verrijk
+from .tagging import verrijk, vernederlands
 from .recipe_import import MAX_PER_IMPORT, ImportFout, importeer_van_url
 from .db import (
     COURSES,
@@ -144,9 +144,15 @@ def _parse_int(value, default, min_value=1, max_value=12):
 
 
 def _normalize_allergies(values):
+    """Kleine letters, geen dubbels, en Engelse termen naar het Nederlands.
+
+    De app is Nederlandstalig, maar er staat nog "chicken" en "soya" in profielen
+    van voor die keuze. Die vertalen we bij het lezen en schrijven, anders zoekt
+    een voorkeur naar een woord dat in geen enkel recept meer voorkomt.
+    """
     out = []
     for value in values or []:
-        token = str(value).strip().lower()
+        token = vernederlands(str(value).strip().lower())
         if token and token not in out:
             out.append(token)
     return out
