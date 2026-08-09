@@ -106,3 +106,28 @@ def test_recept_zonder_inhoud_geeft_geen_treffer():
 def test_welke_komen_voor_geeft_alleen_de_treffers():
     gerecht = recept(ingredienten=["champignons", "room", "kipfilet"])
     assert welke_komen_voor(gerecht, ["paddenstoel", "vis", "kip"]) == ["paddenstoel", "kip"]
+
+
+# --- Engelse schrijfwijzen uit oudere profielen ---
+
+
+def test_engelse_schrijfwijze_krijgt_dezelfde_dekking():
+    """Regressie: 'soya' zocht letterlijk naar 'soya' en miste sojasaus."""
+    assert bevat(recept(ingredienten=["scheutje sojasaus"]), "soya") is True
+    assert bevat(recept(ingredienten=["tofu"]), "soya") is True
+
+
+@pytest.mark.parametrize(
+    "term,ingredient",
+    [
+        ("nuts", "walnoten"),
+        ("peanut", "pindakaas"),
+        ("fish", "kabeljauwfilet"),
+        ("shellfish", "garnalen"),
+        ("celery", "knolselder"),
+        ("mustard", "dijonmosterd"),
+        ("sesame", "sesamzaad"),
+    ],
+)
+def test_engelse_allergienamen_vinden_het_nederlandse_ingredient(term, ingredient):
+    assert bevat(recept(ingredienten=[ingredient]), term) is True

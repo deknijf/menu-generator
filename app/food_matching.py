@@ -20,6 +20,17 @@ from .tagging import _ALLERGEEN_REGELS
 
 # Zelfde zaak, andere naam. Wederzijds uitwisselbaar.
 SYNONIEMEN = [
+    # De Engelse schrijfwijzen staan erbij omdat ze in profielen voorkomen: wie
+    # ooit "soya" of "peanut" intypte, hoort dezelfde bescherming te krijgen als
+    # wie "soja" of "pinda" schreef.
+    {"soja", "soya"},
+    {"pinda", "peanut", "aardnoot", "arachide"},
+    {"noten", "nuts"},
+    {"vis", "fish"},
+    {"schaaldieren", "shellfish"},
+    {"selderij", "selder", "celery"},
+    {"mosterd", "mustard"},
+    {"sesam", "sesame"},
     {"paddenstoel", "paddestoel"},
     {"ui", "ajuin"},
     {"witloof", "witlof", "chicon"},
@@ -131,12 +142,16 @@ def bevat(recept, term):
         return False
 
     # Voor de veertien allergenen gebruiken we dezelfde regels als bij het
-    # labelen, zodat "noten" hier net zo breed telt als daar.
-    patroon = _ALLERGEEN_PATRONEN.get(token)
-    if patroon and re.search(patroon, tekst, re.I):
-        return True
+    # labelen, zodat "noten" hier net zo breed telt als daar. Ook de synoniemen
+    # krijgen die behandeling: anders zoekt "soya" letterlijk naar "soya" en
+    # glipt sojasaus erdoor.
+    varianten = expandeer(token)
+    for naam in varianten:
+        patroon = _ALLERGEEN_PATRONEN.get(naam)
+        if patroon and re.search(patroon, tekst, re.I):
+            return True
 
-    return any(_past_in_tekst(t, tekst) for t in expandeer(token))
+    return any(_past_in_tekst(t, tekst) for t in varianten)
 
 
 def welke_komen_voor(recept, termen):
