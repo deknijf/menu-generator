@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Gebruiker bewerken</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
-  <link rel="stylesheet" href="/static/styles.css?v=20260809v3" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260809v4" />
 </head>
 <body class="shopping-history-page">
   <div class="app-layout">
@@ -42,7 +42,11 @@
         <div class="detail-head">
           <div class="shopping-history-hero-text">
             <h3>Gebruiker bewerken</h3>
-            <p class="muted">Pas gebruikersgegevens, rol, groep en wachtwoord aan.</p>
+            <p class="muted">
+              {% if can_manage_account %}Pas gebruikersgegevens, rol, groep en wachtwoord aan.
+              {% else %}Pas je gegevens, wachtwoord en voorkeuren aan.{% endif %}
+              Allergieën worden altijd geweerd uit de planning, wat je niet lekker vindt komt er nog zelden in.
+            </p>
           </div>
           <div class="detail-head-actions">
             {% if can_delete_account and not target_is_super_admin %}
@@ -59,6 +63,7 @@
           <label>E-mail
             <input id="account-email" type="email" value="{{ target.email }}" />
           </label>
+          {% if can_manage_account %}
           <label>Rol
             <select id="account-role" {% if target_is_super_admin %}disabled{% endif %}>
               <option value="user" {% if (not target.is_admin) and (not target.is_group_admin) %}selected{% endif %}>Gebruiker</option>
@@ -78,6 +83,7 @@
               {% endfor %}
             </select>
           </label>
+          {% endif %}
           <label>Nieuw wachtwoord (optioneel)
             <input id="account-password" type="password" placeholder="Minstens 8 tekens" />
           </label>
@@ -97,6 +103,14 @@
               <input id="account-allergies-input" type="text" placeholder="bv. noten, lactose" />
             </div>
           </div>
+
+          <div class="chip-field">
+            <span class="chip-field-label">Favoriet eten</span>
+            <p class="muted">Scheid met een komma. Ingrediënten of keukens die je vaker wil.</p>
+            <div id="account-likes-chips" class="chips-input">
+              <input id="account-likes-input" type="text" placeholder="bv. kip, mediterraans" />
+            </div>
+          </div>
           <div class="button-row">
             <button class="btn btn-primary" type="submit">Opslaan</button>
             <span id="account-save-status" class="muted"></span>
@@ -105,7 +119,7 @@
       </section>
     </main>
   </div>
-  <script src="/static/chip-input.js?v=20260809v3"></script>
+  <script src="/static/chip-input.js?v=20260809v4"></script>
   <script>
     (function () {
       const form = document.getElementById("account-detail-form");
@@ -121,6 +135,10 @@
         document.getElementById("account-allergies-chips"),
         { waarden: {{ target_allergies | tojson }} }
       );
+      const likes = window.ChipInput.koppel(
+        document.getElementById("account-likes-chips"),
+        { waarden: {{ target_likes | tojson }} }
+      );
 
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -128,15 +146,19 @@
         const currentEmail = String(form.dataset.email || "").trim().toLowerCase();
         const name = document.getElementById("account-name").value.trim();
         const email = document.getElementById("account-email").value.trim().toLowerCase();
-        const role = document.getElementById("account-role").value;
-        const group_id = Number(document.getElementById("account-group").value || 0);
         const password = document.getElementById("account-password").value || "";
 
         const payload = {
-          name, email, role, group_id, password,
+          name, email, password,
           dislikes: dislikes ? dislikes.waarden() : [],
           allergies: allergies ? allergies.waarden() : [],
+          likes: likes ? likes.waarden() : [],
         };
+        // Rol en groep staan er alleen voor wie accounts mag beheren.
+        const roleEl = document.getElementById("account-role");
+        const groupEl = document.getElementById("account-group");
+        if (roleEl) payload.role = roleEl.value;
+        if (groupEl) payload.group_id = Number(groupEl.value || 0);
         const res = await fetch(`/api/accounts/${encodeURIComponent(currentEmail)}/detail`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },

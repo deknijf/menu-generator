@@ -13,7 +13,7 @@
   <link rel="apple-touch-icon" href="/static/icon-192.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="/static/styles.css?v=20260809v3" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260809v4" />
 </head>
 <body>
   <div class="app-layout">
@@ -527,6 +527,16 @@
             <p id="profile-menu-mode-help" class="muted"></p>
             <p id="profile-ai-optional-note" class="muted"></p>
 
+            <div class="chip-field profile-preferences-link">
+              <span class="chip-field-label">Allergieën en smaak</span>
+              <p class="muted">
+                Deze staan per persoon op de accountpagina, want ze verschillen van
+                huisgenoot tot huisgenoot. Allergieën van iedereen in de groep worden
+                geweerd uit de planning.
+              </p>
+              <a id="profile-own-account-link" class="btn btn-secondary" href="#">Mijn allergieën en smaak</a>
+            </div>
+
             <div class="profile-settings-grid">
               <div class="chip-field">
                 <h4>Mijn wachtwoord</h4>
@@ -580,32 +590,6 @@
               </div>
             </div>
 
-            <div id="profile-ai-preferences" class="profile-preferences-grid">
-              <div class="chip-field">
-                <h4>Allergieën</h4>
-                <p class="muted">Optioneel. Typ een woord en druk op spatie.</p>
-                <div id="profile-allergies-chips" class="chips-input" data-field="allergies">
-                  <input id="profile-allergies-input" type="text" placeholder="bv. lactose" />
-                </div>
-              </div>
-
-              <div class="chip-field">
-                <h4>Favoriet eten</h4>
-                <p class="muted">Optioneel. Ingrediënten of keukens die je vaker wil.</p>
-                <div id="profile-likes-chips" class="chips-input" data-field="likes">
-                  <input id="profile-likes-input" type="text" placeholder="bv. kip" />
-                </div>
-              </div>
-
-              <div class="chip-field">
-                <h4>Eten dat je niet graag eet</h4>
-                <p class="muted">Optioneel. Deze items krijgen een lagere score.</p>
-                <div id="profile-dislikes-chips" class="chips-input" data-field="dislikes">
-                  <input id="profile-dislikes-input" type="text" placeholder="bv. paddenstoelen" />
-                </div>
-              </div>
-            </div>
-
             <div class="button-row">
               <button id="save-profile-btn" class="btn btn-primary" type="button">Opslaan</button>
               <span id="profile-save-status" class="muted"></span>
@@ -616,7 +600,7 @@
     </main>
   </div>
 
-  <script src="/static/recipe-view.js?v=20260809v3"></script>
-  <script src="/static/app.js?v=20260809v3"></script>
+  <script src="/static/recipe-view.js?v=20260809v4"></script>
+  <script src="/static/app.js?v=20260809v4"></script>
 </body>
 </html>

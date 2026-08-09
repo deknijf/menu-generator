@@ -6,9 +6,6 @@ const state = {
   historyDays: [],
   historyMonthAnchor: null,
   settings: null,
-  profileAllergies: [],
-  profileLikes: [],
-  profileDislikes: [],
   customMeals: [],
   selectedCustomMealIds: [],
   profileMenuMode: "ai_only",
@@ -274,94 +271,6 @@ function splitLinesText(value) {
     .split("\n")
     .map((x) => x.trim())
     .filter(Boolean);
-}
-
-function splitChipTokens(value) {
-  return String(value || "")
-    .split(/[\s,;]+/g)
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean);
-}
-
-function getProfileChipState(field) {
-  if (field === "allergies") return state.profileAllergies;
-  if (field === "likes") return state.profileLikes;
-  return state.profileDislikes;
-}
-
-function setProfileChipState(field, tokens) {
-  const unique = [];
-  for (const token of tokens || []) {
-    if (token && !unique.includes(token)) unique.push(token);
-  }
-  if (field === "allergies") state.profileAllergies = unique;
-  else if (field === "likes") state.profileLikes = unique;
-  else state.profileDislikes = unique;
-}
-
-function renderProfileChips(field) {
-  const root = document.getElementById(`profile-${field}-chips`);
-  const input = document.getElementById(`profile-${field}-input`);
-  if (!root || !input) return;
-
-  root.querySelectorAll(".chip-tag").forEach((chip) => chip.remove());
-  const values = getProfileChipState(field);
-  values.forEach((value, index) => {
-    const chip = document.createElement("span");
-    chip.className = "chip-tag";
-    chip.innerHTML = `<span>${value}</span><button type="button" aria-label="Verwijder ${value}">×</button>`;
-    chip.querySelector("button").addEventListener("click", () => {
-      const next = getProfileChipState(field).slice();
-      next.splice(index, 1);
-      setProfileChipState(field, next);
-      renderProfileChips(field);
-    });
-    root.insertBefore(chip, input);
-  });
-}
-
-function addProfileChipTokens(field, rawValue) {
-  const tokens = splitChipTokens(rawValue);
-  if (!tokens.length) return;
-  const next = getProfileChipState(field).slice();
-  tokens.forEach((token) => {
-    if (!next.includes(token)) next.push(token);
-  });
-  setProfileChipState(field, next);
-  renderProfileChips(field);
-}
-
-function initProfileChipField(field) {
-  const input = document.getElementById(`profile-${field}-input`);
-  const root = document.getElementById(`profile-${field}-chips`);
-  if (!input || !root) return;
-
-  input.addEventListener("keydown", (event) => {
-    if (event.key === " " || event.key === "Enter" || event.key === "Tab" || event.key === ",") {
-      event.preventDefault();
-      addProfileChipTokens(field, input.value);
-      input.value = "";
-    } else if (event.key === "Backspace" && !input.value) {
-      const items = getProfileChipState(field).slice();
-      if (!items.length) return;
-      items.pop();
-      setProfileChipState(field, items);
-      renderProfileChips(field);
-    }
-  });
-
-  input.addEventListener("blur", () => {
-    addProfileChipTokens(field, input.value);
-    input.value = "";
-  });
-
-  input.addEventListener("paste", (event) => {
-    const text = event.clipboardData?.getData("text");
-    if (!text) return;
-    event.preventDefault();
-    addProfileChipTokens(field, text);
-    input.value = "";
-  });
 }
 
 function isAiGeneratedMeal(item) {
@@ -680,12 +589,6 @@ async function fetchProfileSettings() {
     document.getElementById("person-count").value = String(baseServings);
   }
 
-  setProfileChipState("allergies", data.profile?.allergies || []);
-  setProfileChipState("likes", data.profile?.likes || []);
-  setProfileChipState("dislikes", data.profile?.dislikes || []);
-  renderProfileChips("allergies");
-  renderProfileChips("likes");
-  renderProfileChips("dislikes");
   state.profileMenuMode = data.profile?.menu_mode || "ai_only";
   state.customMealsCount = Number(data.profile?.custom_meals_count || 0);
   state.isPrimaryAdmin = Boolean(data.profile?.is_primary_admin);
@@ -1194,31 +1097,21 @@ function updateProfileMenuModeOptions() {
 function updateProfilePreferencesHint() {
   const note = document.getElementById("profile-ai-optional-note");
   const select = document.getElementById("profile-menu-mode");
-  const prefs = document.getElementById("profile-ai-preferences");
   if (!note || !select) return;
-  // Deze voorkeuren filteren de receptenbibliotheek zelf, dus ze tellen in elke
-  // menumodus. Vroeger verdwenen ze bij "alleen eigen maaltijden"; dat klopte
-  // niet meer zodra de planner er ook op eigen recepten naar kijkt.
-  if (prefs) {
-    prefs.hidden = false;
-    prefs.style.display = "grid";
-  }
-  const baseNote =
-    "Allergieën komen nooit in de planning. Wat je niet lekker vindt komt er nog heel af en toe in.";
-  if (!state.canManageGroupMenuMode) {
-    note.textContent = `${baseNote} Alleen admin of groep-admin kan deze instelling aanpassen.`;
-  } else {
-    note.textContent = baseNote;
-  }
+  note.textContent = state.canManageGroupMenuMode
+    ? ""
+    : "Alleen admin of groep-admin kan deze instelling aanpassen.";
+
+  // De link naar de eigen accountpagina, waar allergieen en smaak staan.
+  const link = document.getElementById("profile-own-account-link");
+  const email = state.user?.email || "";
+  if (link && email) link.href = `/account/${encodeURIComponent(email)}`;
 }
 
 async function saveProfilePreferences(status) {
-  const allergies = (state.profileAllergies || []).map((item) => item.toLowerCase());
-  const likes = (state.profileLikes || []).map((item) => item.toLowerCase());
-  const dislikes = (state.profileDislikes || []).map((item) => item.toLowerCase());
-  const menu_mode = document.getElementById("profile-menu-mode").value;
-
-  const payload = { allergies, likes, dislikes, menu_mode };
+  // Allergieen en smaak staan op de accountpagina. Ze worden hier bewust niet
+  // meegestuurd: het endpoint laat weg wat het niet krijgt, dus blijven ze staan.
+  const payload = { menu_mode: document.getElementById("profile-menu-mode").value };
 
   const res = await fetch("/api/profile", {
     method: "PUT",
@@ -1237,12 +1130,6 @@ async function saveProfilePreferences(status) {
   }
 
   const data = await res.json();
-  setProfileChipState("allergies", data.allergies || []);
-  setProfileChipState("likes", data.likes || []);
-  setProfileChipState("dislikes", data.dislikes || []);
-  renderProfileChips("allergies");
-  renderProfileChips("likes");
-  renderProfileChips("dislikes");
   state.profileMenuMode = data.menu_mode || state.profileMenuMode;
   state.customMealsCount = Number(data.custom_meals_count || state.customMealsCount || 0);
   const profileGroupEl = document.getElementById("profile-group");
@@ -2521,9 +2408,6 @@ async function boot() {
   initSidebarToggle();
   initCustomMealServings();
   initCustomMealUpload();
-  initProfileChipField("allergies");
-  initProfileChipField("likes");
-  initProfileChipField("dislikes");
   bindTabs();
   const savedTab = localStorage.getItem(activeTabStorageKey);
   if (savedTab) {

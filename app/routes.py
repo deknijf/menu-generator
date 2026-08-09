@@ -240,6 +240,20 @@ def _lees_lijst(waarde):
     return _normalize_allergies(waarde)
 
 
+def _bewaar_voorkeuren(email, payload):
+    """Slaat smaak en allergieen op, maar alleen wat er ook echt in staat.
+
+    Een ontbrekend veld betekent "niet aangeraakt", niet "leeggemaakt": anders
+    wist een scherm dat maar een deel toont de rest van iemands voorkeuren.
+    """
+    if "dislikes" in payload:
+        set_user_dislikes(email, _lees_lijst(payload.get("dislikes")))
+    if "allergies" in payload:
+        set_user_allergies(email, _lees_lijst(payload.get("allergies")))
+    if "likes" in payload:
+        set_user_likes(email, _lees_lijst(payload.get("likes")))
+
+
 def _to_float(value, default):
     try:
         return float(value)
@@ -940,13 +954,17 @@ def register_routes(app):
     def account_detail(user_email):
         user = _require_auth()
         settings = _runtime_settings(app)
-        if not _can_manage_group_users(user, settings):
-            abort(403)
         target_email = str(user_email or "").strip().lower()
+        # Je eigen pagina staat altijd open: daar staan je allergieen en smaak,
+        # en die horen niet achter een beheerdersrol te zitten.
+        eigen_pagina = target_email == str(user.get("email") or "").strip().lower()
+        beheerder = _can_manage_group_users(user, settings)
+        if not eigen_pagina and not beheerder:
+            abort(403)
         target = get_auth_user(target_email)
         if not target:
             abort(404)
-        if not _is_primary_admin(user, settings):
+        if not eigen_pagina and not _is_primary_admin(user, settings):
             gids = {int(gid) for gid in get_user_group_ids(target_email)}
             if int(user.get("group_id") or -1) not in gids:
                 abort(403)
@@ -958,11 +976,13 @@ def register_routes(app):
             target_group_ids=get_user_group_ids(target_email),
             groups=list_groups(),
             can_edit_global_role=_is_primary_admin(user, settings),
-            can_delete_account=_is_admin(user),
+            can_delete_account=_is_admin(user) and not eigen_pagina,
+            can_manage_account=beheerder,
             primary_admin_email=_super_admin_email(app),
             target_is_super_admin=(target_email == _super_admin_email(app)),
             target_dislikes=get_user_dislikes(target_email),
             target_allergies=get_user_allergies(target_email),
+            target_likes=get_user_likes(target_email),
         )
 
     @app.delete("/api/shopping-history/<int:entry_id>")
@@ -1105,21 +1125,7 @@ def register_routes(app):
         user = _require_auth()
         settings = _runtime_settings(app)
         payload = request.get_json(force=True, silent=True) or {}
-        allergies = payload.get("allergies", [])
-        likes = payload.get("likes", [])
-        dislikes = payload.get("dislikes", [])
         requested_menu_mode = _normalize_menu_mode(payload.get("menu_mode", "ai_only"))
-
-        if isinstance(allergies, str):
-            allergies = [part.strip() for part in allergies.split(",")]
-        if isinstance(likes, str):
-            likes = [part.strip() for part in likes.split(",")]
-        if isinstance(dislikes, str):
-            dislikes = [part.strip() for part in dislikes.split(",")]
-
-        allergies = _normalize_allergies(allergies)
-        likes = _normalize_allergies(likes)
-        dislikes = _normalize_allergies(dislikes)
         current_menu_mode, custom_count = _effective_menu_mode(user["email"])
         can_manage_mode = _can_manage_group_menu_mode(user, settings)
         if requested_menu_mode != current_menu_mode and not can_manage_mode:
@@ -1130,9 +1136,13 @@ def register_routes(app):
         if menu_mode == "custom_only" and custom_count < 8:
             return jsonify({"error": "Voor deze optie heb je minstens 8 eigen maaltijden nodig."}), 400
 
-        set_user_allergies(user["email"], allergies)
-        set_user_likes(user["email"], likes)
-        set_user_dislikes(user["email"], dislikes)
+        # Smaak en allergieen staan sinds v0.5.3 op de accountpagina. Dit scherm
+        # toont ze niet meer, dus stuurt het ze ook niet mee - en dan blijven ze
+        # staan in plaats van gewist te worden.
+        _bewaar_voorkeuren(user["email"], payload)
+        allergies = get_user_allergies(user["email"])
+        likes = get_user_likes(user["email"])
+        dislikes = get_user_dislikes(user["email"])
         set_group_menu_mode(user["group_id"], menu_mode)
 
         if _is_primary_admin(user, settings):
@@ -1507,15 +1517,36 @@ def register_routes(app):
     def api_accounts_update_detail(user_email):
         user = _require_auth()
         settings = _runtime_settings(app)
-        if not _can_manage_group_users(user, settings):
-            return jsonify({"error": "Niet toegestaan"}), 403
-
         current_email = str(user_email or "").strip().lower()
         if not current_email:
             return jsonify({"error": "Ongeldige account"}), 400
         target = get_auth_user(current_email)
         if not target:
             return jsonify({"error": "Account niet gevonden"}), 404
+
+        eigen_pagina = current_email == str(user.get("email") or "").strip().lower()
+        if not _can_manage_group_users(user, settings):
+            if not eigen_pagina:
+                return jsonify({"error": "Niet toegestaan"}), 403
+            # Zonder beheerdersrol mag je wel je eigen smaak en wachtwoord
+            # aanpassen, maar niet je rol of groep: dat zou een rechtenverhoging zijn.
+            payload = request.get_json(force=True, silent=True) or {}
+            eigen_wachtwoord = str(payload.get("password") or "")
+            if eigen_wachtwoord:
+                if len(eigen_wachtwoord) < 8:
+                    return jsonify({"error": "Wachtwoord moet minstens 8 tekens hebben."}), 400
+                if not update_auth_password(current_email, eigen_wachtwoord):
+                    return jsonify({"error": "Wachtwoord opslaan mislukt."}), 400
+            _bewaar_voorkeuren(current_email, payload)
+            return jsonify(
+                {
+                    "ok": True,
+                    "item": get_auth_user(current_email),
+                    "dislikes": get_user_dislikes(current_email),
+                    "allergies": get_user_allergies(current_email),
+                    "likes": get_user_likes(current_email),
+                }
+            )
 
         is_primary = _is_primary_admin(user, settings)
         target_group_ids = {int(gid) for gid in get_user_group_ids(current_email)}
@@ -1572,10 +1603,7 @@ def register_routes(app):
 
         # Smaak en allergieen horen bij de persoon, dus verhuizen ze mee als het
         # e-mailadres verandert; update_auth_user_identity heeft de rijen al omgezet.
-        if "dislikes" in payload:
-            set_user_dislikes(target_email, _lees_lijst(payload.get("dislikes")))
-        if "allergies" in payload:
-            set_user_allergies(target_email, _lees_lijst(payload.get("allergies")))
+        _bewaar_voorkeuren(target_email, payload)
 
         updated = get_auth_user(target_email)
         if not updated:
@@ -1586,6 +1614,7 @@ def register_routes(app):
                 "item": updated,
                 "dislikes": get_user_dislikes(target_email),
                 "allergies": get_user_allergies(target_email),
+                "likes": get_user_likes(target_email),
             }
         )
 
