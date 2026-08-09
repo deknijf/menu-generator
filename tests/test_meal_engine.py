@@ -317,3 +317,97 @@ def test_ontbrekende_voedingswaarden_scoren_neutraal(settings, options, make_rec
     zonder = make_recipe("b", "Zonder data", protein=0, carbs=0)
     verschil = abs(_recipe_score(met_data, settings, options) - _recipe_score(zonder, settings, options))
     assert verschil < 0.5
+
+
+# --- Wat je niet lekker vindt ---
+
+
+def test_afkeer_wordt_herkend_via_een_variant(make_recipe):
+    """De gebruiker typt 'paddenstoelen', het recept zegt 'kastanjechampignons'."""
+    from app.meal_engine import bevat_afkeer
+
+    recept = make_recipe("r1", ingredients=[{"name": "kastanjechampignons"}])
+    assert bevat_afkeer(recept, ["paddenstoelen"]) is True
+    assert bevat_afkeer(recept, ["witloof"]) is False
+
+
+def test_afkeer_zonder_termen_raakt_niets(make_recipe):
+    from app.meal_engine import bevat_afkeer
+
+    recept = make_recipe("r1", ingredients=[{"name": "champignons"}])
+    assert bevat_afkeer(recept, []) is False
+    assert bevat_afkeer(recept, ["", None]) is False
+
+
+def test_gerecht_met_afkeer_valt_meestal_af(make_recipe, monkeypatch):
+    """Zeven procent kans betekent: bij een hoge worp gaat het gerecht eruit."""
+    from app import meal_engine
+
+    monkeypatch.setattr(meal_engine.random, "random", lambda: 0.99)
+    lekker = make_recipe("goed", ingredients=[{"name": "kipfilet"}])
+    niet_lekker = make_recipe("slecht", ingredients=[{"name": "champignons"}])
+
+    overgebleven = meal_engine._filter_afkeer([lekker, niet_lekker], ["paddenstoelen"])
+
+    assert [r["id"] for r in overgebleven] == ["goed"]
+
+
+def test_gerecht_met_afkeer_glipt_er_af_en_toe_door(make_recipe, monkeypatch):
+    from app import meal_engine
+
+    monkeypatch.setattr(meal_engine.random, "random", lambda: 0.01)
+    lekker = make_recipe("goed", ingredients=[{"name": "kipfilet"}])
+    niet_lekker = make_recipe("slecht", ingredients=[{"name": "champignons"}])
+
+    overgebleven = meal_engine._filter_afkeer([lekker, niet_lekker], ["paddenstoelen"])
+
+    assert {r["id"] for r in overgebleven} == {"goed", "slecht"}
+
+
+def test_liever_iets_dat_je_niet_lust_dan_een_lege_week(make_recipe, monkeypatch):
+    """Als alles afvalt, is een matig gerecht beter dan geen planning."""
+    from app import meal_engine
+
+    monkeypatch.setattr(meal_engine.random, "random", lambda: 0.99)
+    alleen_paddenstoelen = [make_recipe("r1", ingredients=[{"name": "shiitake"}])]
+
+    overgebleven = meal_engine._filter_afkeer(alleen_paddenstoelen, ["paddenstoelen"])
+
+    assert [r["id"] for r in overgebleven] == ["r1"]
+
+
+def test_allergie_kent_geen_uitzondering(settings, make_recipe, week, options):
+    """Anders dan een afkeer mag een allergeen er nooit doorglippen."""
+    from app.meal_engine import generate_plan
+
+    veilig = make_recipe("veilig", ingredients=[{"name": "kipfilet"}])
+    met_noten = make_recipe("noten", ingredients=[{"name": "walnoten"}])
+
+    plan = generate_plan(
+        week, settings, options,
+        allergies_override=["noten"],
+        custom_recipes=[veilig, met_noten],
+        include_base_recipes=False,
+    )
+
+    assert plan
+    assert all(dag["meal_id"] != "noten" for dag in plan)
+
+
+def test_afkeer_uit_de_settings_wordt_gebruikt(settings, make_recipe, week, options, monkeypatch):
+    """Zonder expliciete override valt de planner terug op family.dislikes."""
+    from app import meal_engine
+
+    monkeypatch.setattr(meal_engine.random, "random", lambda: 0.99)
+    settings["family"]["dislikes"] = ["paddenstoelen"]
+    veilig = make_recipe("veilig", ingredients=[{"name": "kipfilet"}])
+    met_zwam = make_recipe("zwam", ingredients=[{"name": "oesterzwammen"}])
+
+    plan = meal_engine.generate_plan(
+        week, settings, options,
+        custom_recipes=[veilig, met_zwam],
+        include_base_recipes=False,
+    )
+
+    assert plan
+    assert all(dag["meal_id"] != "zwam" for dag in plan)

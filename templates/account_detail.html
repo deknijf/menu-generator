@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Gebruiker bewerken</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
-  <link rel="stylesheet" href="/static/styles.css?v=20260809v2" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260809v3" />
 </head>
 <body class="shopping-history-page">
   <div class="app-layout">
@@ -81,6 +81,22 @@
           <label>Nieuw wachtwoord (optioneel)
             <input id="account-password" type="password" placeholder="Minstens 8 tekens" />
           </label>
+
+          <div class="chip-field">
+            <span class="chip-field-label">Wat vind je niet lekker</span>
+            <p class="muted">Scheid met een komma. Deze gerechten komen nog maar zelden in de planning.</p>
+            <div id="account-dislikes-chips" class="chips-input">
+              <input id="account-dislikes-input" type="text" placeholder="bv. paddenstoelen, witloof" />
+            </div>
+          </div>
+
+          <div class="chip-field">
+            <span class="chip-field-label">Allergieën</span>
+            <p class="muted">Scheid met een komma. Deze komen nooit in de planning.</p>
+            <div id="account-allergies-chips" class="chips-input">
+              <input id="account-allergies-input" type="text" placeholder="bv. noten, lactose" />
+            </div>
+          </div>
           <div class="button-row">
             <button class="btn btn-primary" type="submit">Opslaan</button>
             <span id="account-save-status" class="muted"></span>
@@ -89,12 +105,22 @@
       </section>
     </main>
   </div>
+  <script src="/static/chip-input.js?v=20260809v3"></script>
   <script>
     (function () {
       const form = document.getElementById("account-detail-form");
       const status = document.getElementById("account-save-status");
       const deleteBtn = document.getElementById("account-delete-btn");
       if (!form) return;
+
+      const dislikes = window.ChipInput.koppel(
+        document.getElementById("account-dislikes-chips"),
+        { waarden: {{ target_dislikes | tojson }} }
+      );
+      const allergies = window.ChipInput.koppel(
+        document.getElementById("account-allergies-chips"),
+        { waarden: {{ target_allergies | tojson }} }
+      );
 
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -106,7 +132,11 @@
         const group_id = Number(document.getElementById("account-group").value || 0);
         const password = document.getElementById("account-password").value || "";
 
-        const payload = { name, email, role, group_id, password };
+        const payload = {
+          name, email, role, group_id, password,
+          dislikes: dislikes ? dislikes.waarden() : [],
+          allergies: allergies ? allergies.waarden() : [],
+        };
         const res = await fetch(`/api/accounts/${encodeURIComponent(currentEmail)}/detail`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },

@@ -1841,6 +1841,24 @@ a.history-day-meal:hover {
   margin-bottom: 0.2rem;
 }
 
+.chip-field-label {
+  display: block;
+  font-weight: 700;
+  margin-bottom: 0.1rem;
+}
+
+.chip-field .muted {
+  margin-bottom: 0.4rem;
+}
+
+/* Het invoerveld zit al in een omkaderde pillenbak; nog een kader eromheen
+   zou een vakje in een vakje geven. */
+.detail-form-grid .chips-input input {
+  border: none;
+  border-radius: 0;
+  padding: 0.22rem 0.2rem;
+}
+
 .profile-admin-groups {
   margin-top: 0.7rem;
 }

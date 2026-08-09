@@ -1196,14 +1196,15 @@ function updateProfilePreferencesHint() {
   const select = document.getElementById("profile-menu-mode");
   const prefs = document.getElementById("profile-ai-preferences");
   if (!note || !select) return;
-  const aiAllowed = select.value !== "custom_only";
+  // Deze voorkeuren filteren de receptenbibliotheek zelf, dus ze tellen in elke
+  // menumodus. Vroeger verdwenen ze bij "alleen eigen maaltijden"; dat klopte
+  // niet meer zodra de planner er ook op eigen recepten naar kijkt.
   if (prefs) {
-    prefs.hidden = !aiAllowed;
-    prefs.style.display = aiAllowed ? "grid" : "none";
+    prefs.hidden = false;
+    prefs.style.display = "grid";
   }
-  const baseNote = aiAllowed
-    ? "Allergieën, favorieten en afkeur zijn optioneel zolang AI-maaltijden toegelaten zijn."
-    : "Je gebruikt nu alleen eigen maaltijden. Deze voorkeuren zijn niet verplicht en worden enkel gebruikt zodra AI weer aan staat.";
+  const baseNote =
+    "Allergieën komen nooit in de planning. Wat je niet lekker vindt komt er nog heel af en toe in.";
   if (!state.canManageGroupMenuMode) {
     note.textContent = `${baseNote} Alleen admin of groep-admin kan deze instelling aanpassen.`;
   } else {

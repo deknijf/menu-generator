@@ -233,6 +233,13 @@ def _normalize_email_values(values):
     return _normalize_allergies(values)
 
 
+def _lees_lijst(waarde):
+    """Accepteert zowel een lijst als een komma-gescheiden tekst."""
+    if isinstance(waarde, str):
+        waarde = waarde.split(",")
+    return _normalize_allergies(waarde)
+
+
 def _to_float(value, default):
     try:
         return float(value)
@@ -240,10 +247,22 @@ def _to_float(value, default):
         return float(default)
 
 
+def _group_members(user_email):
+    """De e-mailadressen die mee-eten: iedereen in dezelfde groep."""
+    gid = int((get_auth_user(user_email) or {}).get("group_id") or 1)
+    emails = [str(u.get("email") or "").strip().lower() for u in list_auth_users(gid)]
+    return [e for e in emails if e] or [str(user_email or "").strip().lower()]
+
+
 def _effective_allergies(user_email, settings):
+    """Allergieen van iedereen in de groep.
+
+    Er wordt voor het hele gezin gekookt, dus wat een huisgenoot niet verdraagt
+    komt ook niet op tafel als jij het plan aanmaakt.
+    """
     family_allergies = settings["family"].get("allergies", [])
-    personal_allergies = get_user_allergies(user_email)
-    return _normalize_allergies([*family_allergies, *personal_allergies])
+    persoonlijk = [a for email in _group_members(user_email) for a in get_user_allergies(email)]
+    return _normalize_allergies([*family_allergies, *persoonlijk])
 
 
 def _effective_likes(user_email, settings):
@@ -253,9 +272,10 @@ def _effective_likes(user_email, settings):
 
 
 def _effective_dislikes(user_email, settings):
+    """Wat de groep niet lekker vindt; net als bij allergieen telt iedereen mee."""
     family_dislikes = settings["family"].get("dislikes", [])
-    personal_dislikes = get_user_dislikes(user_email)
-    return _normalize_allergies([*family_dislikes, *personal_dislikes])
+    persoonlijk = [d for email in _group_members(user_email) for d in get_user_dislikes(email)]
+    return _normalize_allergies([*family_dislikes, *persoonlijk])
 
 
 def _settings_for_user(user_email, settings):
@@ -941,6 +961,8 @@ def register_routes(app):
             can_delete_account=_is_admin(user),
             primary_admin_email=_super_admin_email(app),
             target_is_super_admin=(target_email == _super_admin_email(app)),
+            target_dislikes=get_user_dislikes(target_email),
+            target_allergies=get_user_allergies(target_email),
         )
 
     @app.delete("/api/shopping-history/<int:entry_id>")
@@ -1548,10 +1570,24 @@ def register_routes(app):
             if not ok_pwd:
                 return jsonify({"error": "Wachtwoord opslaan mislukt."}), 400
 
+        # Smaak en allergieen horen bij de persoon, dus verhuizen ze mee als het
+        # e-mailadres verandert; update_auth_user_identity heeft de rijen al omgezet.
+        if "dislikes" in payload:
+            set_user_dislikes(target_email, _lees_lijst(payload.get("dislikes")))
+        if "allergies" in payload:
+            set_user_allergies(target_email, _lees_lijst(payload.get("allergies")))
+
         updated = get_auth_user(target_email)
         if not updated:
             return jsonify({"error": "Account niet gevonden na opslaan."}), 404
-        return jsonify({"ok": True, "item": updated})
+        return jsonify(
+            {
+                "ok": True,
+                "item": updated,
+                "dislikes": get_user_dislikes(target_email),
+                "allergies": get_user_allergies(target_email),
+            }
+        )
 
     @app.get("/api/groups")
     def api_groups_get():

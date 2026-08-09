@@ -4,6 +4,12 @@ import random
 from datetime import datetime
 import re
 
+from .food_matching import bevat as _bevat_ingredient
+
+# Wat je niet lust hoort zeldzaam te zijn, niet onmogelijk: af en toe eens iets
+# met paddenstoelen houdt de planning gevarieerd zonder dat het een gewoonte wordt.
+KANS_NIET_LEKKER = 0.07
+
 
 def load_recipes(path="app/recipes.json"):
     return json.loads(Path(path).read_text(encoding="utf-8"))
@@ -394,27 +400,14 @@ def _recipe_contains_allergy(recipe, allergy):
     if not tokens:
         return False
 
-    # 1) Explicit allergen metadata
+    # 1) Expliciete allergeenlabels op het recept.
     recipe_allergens = {_normalize_token(a) for a in recipe.get("allergens", [])}
     if tokens.intersection(recipe_allergens):
         return True
 
-    # 2) Ingredient names, tags and recipe name (for user-defined intolerances like "citroen")
-    parts = [_normalize_token(recipe.get("name", ""))]
-    parts.extend(_normalize_token(tag) for tag in recipe.get("tags", []))
-    for ing in recipe.get("ingredients", []):
-        parts.append(_normalize_token(ing.get("name", "")))
-    haystack = " ".join(part for part in parts if part)
-    if not haystack:
-        return False
-
-    # Match full token boundaries when possible, fallback to substring for multi-word values.
-    for token in tokens:
-        if re.search(rf"(^|[^a-z0-9]){re.escape(token)}([^a-z0-9]|$)", haystack):
-            return True
-        if token in haystack:
-            return True
-    return False
+    # 2) Naam, tags en ingredienten, met synoniemen en samenstellingen. Zo vindt
+    # "paddenstoelen" ook shiitake, en "ui" ook ajuin.
+    return any(_bevat_ingredient(recipe, token) for token in tokens)
 
 
 def _is_allowed(recipe, settings, allergies_override=None):
@@ -427,12 +420,41 @@ def _is_allowed(recipe, settings, allergies_override=None):
     return not any(_recipe_contains_allergy(recipe, allergy) for allergy in allergies)
 
 
-def generate_plan(cook_days, settings, options, allergies_override=None, custom_recipes=None, include_base_recipes=True):
+def bevat_afkeer(recipe, dislikes):
+    """True als het recept iets bevat dat deze huishouding niet lust."""
+    return any(_bevat_ingredient(recipe, term) for term in dislikes or [] if _normalize_token(term))
+
+
+def _filter_afkeer(recipes, dislikes, kans=KANS_NIET_LEKKER):
+    """Haalt gerechten met iets onsmakelijks eruit, op een enkele uitzondering na.
+
+    Blijft er niets over, dan gaat de afkeer voor op niets kunnen plannen: een
+    gerecht dat je matig vindt is beter dan een lege week.
+    """
+    if not dislikes:
+        return list(recipes)
+
+    overgebleven = [r for r in recipes if not bevat_afkeer(r, dislikes) or random.random() < kans]
+    return overgebleven or list(recipes)
+
+
+def generate_plan(
+    cook_days,
+    settings,
+    options,
+    allergies_override=None,
+    custom_recipes=None,
+    include_base_recipes=True,
+    dislikes_override=None,
+):
     base = list(load_recipes()) if include_base_recipes else []
     all_recipes = base + list(custom_recipes or [])
     recipes = [r for r in all_recipes if _is_allowed(r, settings, allergies_override=allergies_override)]
     if not recipes:
         return []
+
+    afkeer = settings["family"].get("dislikes", []) if dislikes_override is None else dislikes_override
+    recipes = _filter_afkeer(recipes, afkeer)
 
     ranked = sorted(
         recipes,
@@ -557,6 +579,7 @@ def select_best_recipe(
     recent_ids=None,
     custom_recipes=None,
     include_base_recipes=True,
+    dislikes_override=None,
 ):
     excluded = set(excluded_ids or [])
     recent_usage = {}
@@ -583,6 +606,9 @@ def select_best_recipe(
         if _blocked_by_neighbors(recipe, prev_recipe=prev_recipe, next_recipe=next_recipe):
             continue
         candidates.append(recipe)
+
+    afkeer = settings["family"].get("dislikes", []) if dislikes_override is None else dislikes_override
+    candidates = _filter_afkeer(candidates, afkeer)
 
     if not candidates:
         return None
