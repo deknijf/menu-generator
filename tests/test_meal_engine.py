@@ -93,11 +93,13 @@ def test_plan_is_leeg_als_alles_wordt_uitgefilterd(settings, options, make_recip
     "rotation,day_count,verwacht",
     [
         ("1_per_week", 7, 1),
-        ("2_per_week", 7, 2),
         ("1_per_week", 14, 2),
-        ("2_per_week", 14, 4),
+        ("1_per_2_weeks", 14, 1),
+        ("1_per_2_weeks", 28, 2),
         ("1_per_month", 30, 1),
         ("1_per_month", 7, 1),
+        ("1_per_2_months", 60, 1),
+        ("1_per_2_months", 30, 1),
     ],
 )
 def test_max_occurrences(make_recipe, rotation, day_count, verwacht):
@@ -220,3 +222,98 @@ def test_verschillende_gerechten_blokkeren_elkaar_niet(make_recipe):
     kip = make_recipe("kip", tags=["chicken"])
     vis = make_recipe("vis", tags=["fish"])
     assert _blocked_by_neighbors(kip, prev_recipe=vis) is False
+
+
+# --- Caloriebalans over de periode ---
+
+
+def test_kcal_penalty_is_nul_binnen_het_budget(make_recipe):
+    """Een gerecht dat onder de resterende ruimte blijft kost niets."""
+    from app.meal_engine import _kcal_penalty
+
+    licht = make_recipe("r1", calories=400)
+    assert _kcal_penalty(licht, verbruikt=0, dagen_gepland=0, totaal_dagen=7, doel=700) == 0
+
+
+def test_kcal_penalty_loopt_op_boven_het_budget(make_recipe):
+    from app.meal_engine import _kcal_penalty
+
+    zwaar = make_recipe("r1", calories=1400)
+    straf = _kcal_penalty(zwaar, verbruikt=0, dagen_gepland=0, totaal_dagen=7, doel=700)
+    assert straf > 0
+
+
+def test_na_een_zware_dag_wordt_zwaar_duurder(make_recipe):
+    """Kern van de balans: een uitschieter maakt de volgende dagen strenger."""
+    from app.meal_engine import _kcal_penalty
+
+    zwaar = make_recipe("r1", calories=1200)
+    vers = _kcal_penalty(zwaar, verbruikt=0, dagen_gepland=0, totaal_dagen=7, doel=700)
+    na_uitschieter = _kcal_penalty(zwaar, verbruikt=2000, dagen_gepland=1, totaal_dagen=7, doel=700)
+    assert na_uitschieter > vers
+
+
+def test_recept_zonder_calorieen_krijgt_geen_straf(make_recipe):
+    from app.meal_engine import _kcal_penalty
+
+    assert _kcal_penalty(make_recipe("r1", calories=0), 0, 0, 7, 700) == 0
+
+
+def test_week_blijft_gemiddeld_rond_het_doel(settings, options, make_recipe, week):
+    """Met een mix van licht en zwaar mag het weekgemiddelde niet ontsporen."""
+    from app.meal_engine import _recipe_kcal
+
+    recepten = []
+    for i in range(10):
+        recepten.append(make_recipe(f"licht{i}", f"Licht {i}", calories=450))
+    for i in range(10):
+        recepten.append(make_recipe(f"zwaar{i}", f"Zwaar {i}", calories=1300))
+
+    op_id = {r["id"]: r for r in recepten}
+    for _ in range(5):
+        plan = generate_plan(week, settings, options, custom_recipes=recepten, include_base_recipes=False)
+        kcals = [_recipe_kcal(op_id[item["meal_id"]]) for item in plan]
+        gemiddelde = sum(kcals) / len(kcals)
+        assert gemiddelde < 1000, f"weekgemiddelde {gemiddelde} te hoog"
+
+
+# --- Variatie in groente ---
+
+
+def test_zelfde_hoofdgroente_wordt_bestraft(make_recipe):
+    from app.meal_engine import _variety_penalty
+
+    bloemkool_a = make_recipe("a", "Gratin van bloemkool", tags=["bloemkool"])
+    bloemkool_b = make_recipe("b", "Soep van bloemkool", tags=["bloemkool"])
+    wortel = make_recipe("c", "Stoemp met wortel", tags=["wortel"])
+
+    assert _variety_penalty(bloemkool_b, [bloemkool_a]) > _variety_penalty(wortel, [bloemkool_a])
+
+
+def test_geen_vier_keer_dezelfde_groente_in_een_week(settings, options, make_recipe, week):
+    """Vier bloemkoolgerechten naast genoeg alternatieven mag niet gebeuren."""
+    from app.meal_engine import _vegetable_key
+
+    recepten = [make_recipe(f"bk{i}", f"Bloemkool {i}", tags=["bloemkool"]) for i in range(6)]
+    recepten += [make_recipe(f"wo{i}", f"Wortel {i}", tags=["wortel"]) for i in range(4)]
+    recepten += [make_recipe(f"br{i}", f"Broccoli {i}", tags=["broccoli"]) for i in range(4)]
+    op_id = {r["id"]: r for r in recepten}
+
+    for _ in range(5):
+        plan = generate_plan(week, settings, options, custom_recipes=recepten, include_base_recipes=False)
+        groenten = [_vegetable_key(op_id[item["meal_id"]]) for item in plan]
+        assert groenten.count("bloemkool") <= 3
+
+
+def test_ontbrekende_voedingswaarden_scoren_neutraal(settings, options, make_recipe):
+    """Een recept zonder eiwitgegevens mag niet structureel onderaan bungelen.
+
+    Zonder deze terugval koos de planner altijd dezelfde handvol recepten die wel
+    voedingswaarden hadden.
+    """
+    from app.meal_engine import _recipe_score
+
+    met_data = make_recipe("a", "Met data", protein=30, carbs=35)
+    zonder = make_recipe("b", "Zonder data", protein=0, carbs=0)
+    verschil = abs(_recipe_score(met_data, settings, options) - _recipe_score(zonder, settings, options))
+    assert verschil < 0.5

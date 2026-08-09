@@ -195,6 +195,48 @@ def test_lijst_is_alfabetisch_met_oplopende_sort_order(shopping_env):
     assert [item["sort_order"] for item in items] == [0, 1, 2]
 
 
+def test_recept_schaalt_vanaf_zijn_eigen_porties(shopping_env):
+    """Een gerecht genoteerd voor 4 personen moet halveren als je voor 2 plant."""
+    recept = {"id": "m1", "servings": 4, "ingredients": [_ingredient("kipfilet", 800, "g")]}
+    shopping_env({"2026-08-03": "m1"}, {"m1": recept})
+
+    items = _build_shopping_items("x@y.be", 1, ["2026-08-03"], 2, 2)
+
+    assert items[0]["quantity"] == 400.0
+
+
+def test_recepten_met_verschillende_porties_naast_elkaar(shopping_env):
+    """Twee gerechten, elk met eigen basisporties, moeten los geschaald worden."""
+    voor_twee = {"id": "m1", "servings": 2, "ingredients": [_ingredient("rijst", 100, "g")]}
+    voor_zes = {"id": "m2", "servings": 6, "ingredients": [_ingredient("rijst", 600, "g")]}
+    shopping_env({"2026-08-03": "m1", "2026-08-04": "m2"}, {"m1": voor_twee, "m2": voor_zes})
+
+    items = _build_shopping_items("x@y.be", 1, ["2026-08-03", "2026-08-04"], 3, 2)
+
+    # m1: 100 * 3/2 = 150, m2: 600 * 3/6 = 300
+    assert items[0]["quantity"] == 450.0
+
+
+def test_recept_zonder_porties_valt_terug_op_base_servings(shopping_env):
+    """Basisrecepten en oudere AI-maaltijden hebben het veld niet."""
+    recept = {"id": "m1", "ingredients": [_ingredient("kipfilet", 300, "g")]}
+    shopping_env({"2026-08-03": "m1"}, {"m1": recept})
+
+    items = _build_shopping_items("x@y.be", 1, ["2026-08-03"], 4, 2)
+
+    assert items[0]["quantity"] == 600.0
+
+
+@pytest.mark.parametrize(
+    "waarde,verwacht",
+    [(1, 1), (2, 2), (6, 6), (0, 2), (7, 2), (None, 2), ("3", 3), ("onzin", 2)],
+)
+def test_recipe_servings_klemt_op_1_tot_6(waarde, verwacht):
+    from app.routes import _recipe_servings
+
+    assert _recipe_servings({"servings": waarde}) == verwacht
+
+
 def test_nieuwe_items_staan_niet_afgevinkt(shopping_env):
     recept = {"id": "m1", "ingredients": [_ingredient("kipfilet", 300, "g")]}
     shopping_env({"2026-08-03": "m1"}, {"m1": recept})
@@ -202,3 +244,33 @@ def test_nieuwe_items_staan_niet_afgevinkt(shopping_env):
     items = _build_shopping_items("x@y.be", 1, ["2026-08-03"], 2, 2)
 
     assert all(item["checked"] is False for item in items)
+
+
+# --- De planner plant alleen hoofdgerechten ---
+
+
+def test_alleen_hoofdgerechten_filtert_gangen():
+    """Een dessert als enige gerecht van de dag slaat nergens op."""
+    from app.routes import alleen_hoofdgerechten
+
+    recepten = [
+        {"id": "a", "course": "hoofdgerecht"},
+        {"id": "b", "course": "dessert"},
+        {"id": "c", "course": "voorgerecht"},
+        {"id": "d", "course": "hoofdgerecht"},
+    ]
+    assert [r["id"] for r in alleen_hoofdgerechten(recepten)] == ["a", "d"]
+
+
+def test_recept_zonder_gang_telt_als_hoofdgerecht():
+    """Basisrecepten en oudere AI-maaltijden hebben het veld niet."""
+    from app.routes import alleen_hoofdgerechten
+
+    assert len(alleen_hoofdgerechten([{"id": "a"}, {"id": "b", "course": ""}])) == 2
+
+
+def test_lege_lijst_geeft_lege_lijst():
+    from app.routes import alleen_hoofdgerechten
+
+    assert alleen_hoofdgerechten([]) == []
+    assert alleen_hoofdgerechten(None) == []

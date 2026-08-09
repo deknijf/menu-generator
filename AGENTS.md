@@ -136,6 +136,43 @@ Drie bronnen, gecombineerd tot één pool waaruit de planner kiest:
 3. **AI** — OpenRouter via `admin_ai.py`, gecachet in `data/openrouter_menu_cache.json`
    (6u TTL) en persistent in `generated_ai_meals`.
 
+Daarnaast kan de gebruiker recepten **importeren** van publieke sites
+(`app/recipe_import.py`, knop in "Mijn maaltijden"). Die belanden als gewone eigen
+maaltijden in `custom_meals`. Drie regels die daarbij gelden:
+
+- **Nooit een receptendatabase in de repo.** De repo is publiek; bereidingsteksten en
+  foto's zijn werk van de auteur. Geïmporteerde recepten horen in de database van de
+  gebruiker die ze importeert, nergens anders.
+- **robots.txt respecteren** bij het verzamelen van links (`urllib.robotparser`).
+- **Rustig aan**: één verzoek tegelijk, een seconde pauze, maximaal
+  `MAX_PER_IMPORT` (20) per keer.
+
+Het parsen komt van `recipe-scrapers` (583 sites). Waar dat tekortschiet vult
+`_SITE_AANVULLINGEN` aan. Dagelijkse Kost staat daarin: hun schema.org-blok bevat maar
+twee stappen, de volledige bereiding zit in de React-payload van dezelfde pagina — die
+lezen we uit de HTML die we toch al ophaalden, zodat `/api/` (door hun robots.txt
+verboden) niet nodig is.
+
+Linkherkenning kijkt naar `href`-attributen én naar kale paden in de paginabron, omdat
+veel sites JavaScript-apps zijn waar de links in een JSON-payload staan.
+
+Elke maaltijd heeft een **gang** (`custom_meals.course`): `voorgerecht`,
+`hoofdgerecht` of `dessert`, standaard hoofdgerecht. Bij import bepaalt
+`_classificeer_gang()` die: eerst `recipeCategory` van de site (Dagelijkse Kost geeft
+letterlijk "Hoofdgerecht"), anders afgeleid uit de naam.
+
+Die afleiding matcht op het **einde** van een woord, niet op een willekeurige
+deelstring. Nederlands plakt samenstellingen aan elkaar, dus "appeltaart" en
+"tomatensoep" moeten meetellen — maar zonder die regel maakt "ijs" van "rijst" een
+dessert en "vla" van "Vlaamse" een nagerecht. Om dezelfde reden staan "ijs",
+"compote" en "confituur" niet in de woordenlijst: te dubbelzinnig.
+
+De herkomst wordt bewaard in `custom_meals.source_url` en getoond als pill met de
+sitenaam: `dagelijksekost`, `joshuaweissman`, of `custom` bij zelf ingevoerde
+maaltijden. De afleiding staat op twee plaatsen — `_source_label()` in `routes.py` voor
+de detailpagina en `sourceLabel()` in `recipe-view.js` voor de kaarten. Die twee horen
+hetzelfde te tonen; pas ze samen aan.
+
 TheMealDB was ooit een vierde bron en is verwijderd. OpenRouter is nu de enige
 AI-bron: valt die weg, dan levert `_external_ai_recipes_for_mode()` een lege lijst
 en meldt de route dat er geen AI-maaltijden beschikbaar zijn. Er is bewust geen
@@ -153,6 +190,16 @@ de effectieve modus verschillen dus regelmatig; log of toon altijd de effectieve
 
 Let op: `_include_base_recipes_for_mode()` geeft alleen `True` bij `ai_and_custom`.
 `recipes.json` doet dus **niet** mee in `ai_only`.
+
+### De planner plant alleen hoofdgerechten
+
+`_extra_recipes_for_mode()` filtert via `alleen_hoofdgerechten()`: voor- en
+nagerechten komen niet in de dagplanning terecht, want een dessert als enige
+gerecht van de dag slaat nergens op. De keuzedialoog ("Kies zelf") filtert om
+dezelfde reden. Recepten zonder gang tellen als hoofdgerecht.
+
+`_recipe_map_for_user()` blijft wél alle gangen bevatten: dat is een opzoektabel
+voor bestaande plannen, geen kandidatenlijst.
 
 ### Planner-opties en scoring
 
@@ -175,12 +222,70 @@ Opties: `high_protein`, `low_carb`, `prefer_fish`, `person_count` (1–8).
 de persoonlijke uit de DB. Allergieën zijn een **harde** uitsluiting; likes en dislikes
 sturen enkel de score bij.
 
-### Schaling
+### Calorieën per portie
 
-Recepten leggen hoeveelheden vast voor `app.base_servings` (default 2). De schaalfactor
-is `person_count / base_servings`, toegepast in `_build_shopping_items()`. De AI-prompt
-zegt expliciet dat hoeveelheden voor `base_servings` genoteerd moeten worden — als je
-die prompt aanpast, hou die afspraak intact, anders klopt de boodschappenlijst niet meer.
+`app/nutrition.py` schat de kcal per portie uit de ingredienten: energie per 100 g
+maal het gewicht, gedeeld door `servings`. De energiewaarden staan in de tabel
+`ingredient_energy` in de database, zodat je ze kan corrigeren zonder code te wijzigen;
+`seed_database()` vult die bij het opstarten aan **zonder bestaande rijen te
+overschrijven**. Stukgewichten (`GRAM_PER_STUK`) blijven in code: dat is omrekening,
+geen voedingsdata.
+
+Bij import wordt de schatting alleen ingevuld als het recept zelf geen calorieën
+meegaf én de dekking minstens 60% is. Onder die grens laten we het veld leeg: een
+getal dat op halve informatie stoelt is misleidender dan geen getal.
+
+Vier correcties die er niet uit mogen, elk met een echte misrekening erachter:
+
+- **Eenheid-aliassen.** `gr` staat naast `g`; zonder dat werd "500 gr gehakt"
+  gelezen als 500 stuks van 100 g, oftewel 50 kilo.
+- **Grote getallen zonder eenheid zijn gram** (`PORTIE_GRENS`). Niemand gebruikt
+  500 stuks van iets.
+- **Langste treffer wint, op woordgrens.** "briochebroodjes" moet op
+  "briochebroodje" (70 g) uitkomen en niet op "brood" (800 g), en de sleutel "ui"
+  mag niet matchen binnen "ruimtevaartsoep".
+- **Frituurolie telt maar voor `OLIE_OPNAME` mee.** Die gaat grotendeels de vuilbak
+  in; volledig meetellen gaf duizenden kcal per portie.
+
+### Porties en schaling
+
+**Elk recept legt zijn eigen porties vast** in de kolom `custom_meals.servings`:
+voor hoeveel personen de genoteerde hoeveelheden gelden. Default 2, toegestaan 1 tot 6
+(`DEFAULT_SERVINGS`, `MIN_SERVINGS`, `MAX_SERVINGS` in `db.py`).
+
+De schaalfactor is dus `person_count / recept.servings`, **per recept** berekend in
+`_build_shopping_items()`. Een gerecht genoteerd voor 4 halveert als je voor 2 plant;
+een gerecht voor 2 niet. Basisrecepten uit `recipes.json` en oudere AI-maaltijden hebben
+het veld niet en vallen via `_recipe_servings()` terug op `app.base_servings`.
+
+De AI-prompt vraagt expliciet om hoeveelheden voor 2 personen plus `"servings": 2` in
+elk item. Pas je die prompt aan, hou die afspraak intact — anders klopt de
+boodschappenlijst niet meer.
+
+Op de detailpagina staat een stepper (pijltjes onder elkaar) die de **weergegeven**
+hoeveelheden herrekent zonder het recept te wijzigen. In bewerkmodus springt hij terug
+naar de opgeslagen porties, want dan bewerk je de basis.
+
+### Rotatiefrequenties
+
+Vier opties, gedefinieerd in `ROTATION_PERIOD_DAYS` (`meal_engine.py`):
+`1_per_week` (7 dagen), `1_per_2_weeks` (14), `1_per_month` (30), `1_per_2_months` (60).
+`_max_occurrences()` rondt naar boven: in een periode van 10 dagen mag een weekgerecht 2x.
+
+`2_per_week` bestond vroeger en is gemigreerd naar `1_per_week`. De mapping staat in
+`LEGACY_ROTATION_LIMITS` (`admin_ai.py`), omdat oude waarden nog in caches en
+geëxporteerde JSON kunnen zitten.
+
+### Bereidingswijze
+
+Opgeslagen als lijst van stappen (`preparation_json`). In de UI typ je platte tekst waar
+**een lege regel een nieuwe stap begint**; die worden automatisch genummerd als "Stap N".
+Een blok mag beginnen met `## Eigen titel`, regels met `-` worden opsommingstekens, en
+`**vet**` werkt inline. Parsen en renderen zit in `static/recipe-view.js`, dat zowel
+`index.html` als `meal_detail.html` laden — die laatste laadt `app.js` niet.
+
+Bij het renderen wordt **eerst geëscaped en pas daarna opgemaakt**; draai dat niet om,
+anders is `**<script>**` een gat.
 
 ### Boodschappen → geschiedenis
 
@@ -230,6 +335,17 @@ worden. Hou dat zo.
 
 **Foutmeldingen zijn Nederlands** en komen als `{"error": "..."}` met een passende
 statuscode terug.
+
+### Zoeken in de eigen maaltijden
+
+De zoekbalk in "Mijn maaltijden" doorzoekt naam, bron, beschrijving, ingredienten,
+tags, allergenen en gang. Ze ondersteunt `&` (en), `|` (of) en `!` (niet), waarbij
+`&` sterker bindt dan `|`: `a & b | c` is `(a en b) of c`. Termen mogen uit meerdere
+woorden bestaan, want er wordt alleen op de operatoren gesplitst.
+
+Parser en matcher staan in `static/app.js` (`parseZoekQuery`, `komtOvereen`). Er is
+een losse controle in `tests/test_search_syntax.js` (`node tests/test_search_syntax.js`)
+die dezelfde logica bevat; pas je de ene aan, pas dan ook de andere aan.
 
 ### Mobiele toegankelijkheid
 
