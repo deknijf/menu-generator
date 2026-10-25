@@ -387,6 +387,24 @@ worden. Hou dat zo.
 **Foutmeldingen zijn Nederlands** en komen als `{"error": "..."}` met een passende
 statuscode terug.
 
+### De maaltijdenlijst laadt pas bij gebruik
+
+`GET /api/custom-meals` was met afstand de zwaarste call bij het opstarten (honderden
+recepten, 560 KB), terwijl je in de winkel alleen de boodschappenlijst nodig hebt. Twee
+maatregelen, allebei bewaakt door `pytest -m live`:
+
+- De API laat `preparation` weg, tenzij `?include_preparation=1`. De kaarten, de
+  zoekfunctie en de keuzedialoog gebruiken de bereiding niet; de detailpagina rendert
+  ze server-side. `ingredients` blijven wel mee, want daar wordt op gezocht.
+- `boot()` laadt de lijst niet meer. `ensureCustomMealsLoaded()` in `app.js` doet dat bij
+  het eerste gebruik: de tab "Mijn maaltijden" of "Kies zelf" in de planner. Mutaties
+  (opslaan, verwijderen, importeren) roepen `loadCustomMeals()` rechtstreeks aan. Nieuwe
+  code die `state.customMeals` leest, moet eerst `await ensureCustomMealsLoaded()`.
+
+Afbeeldingen van kaarten en planning krijgen `loading="lazy"`, en dat attribuut staat
+vóór `src`, anders start de browser het laden toch. Een verborgen tab laadt zo geen
+twintig foto's van Unsplash en Dagelijkse Kost.
+
 ### Zoeken in de eigen maaltijden
 
 De zoekbalk in "Mijn maaltijden" doorzoekt naam, bron, beschrijving, ingredienten,
@@ -414,7 +432,8 @@ Drie regels die makkelijk stuk gaan en daarom door tests bewaakt worden:
    mobiele blok onderaan `static/styles.css`. Let op de specificiteit: verspreid over
    het bestand staan class-selectoren zoals `.shopping-tools input[type="text"]` die
    een kleinere `font-size` zetten en een generieke `input`-regel overrulen.
-3. **Aanraakvlakken minstens 44×44 px** (Apple HIG, WCAG 2.5.5). De klikbare zone telt,
+3. **Aanraakvlakken minstens 44×44 px** (Apple HIG, WCAG 2.5.5). Op mobiel krijgt elke
+   `.btn` daarom `min-height: 44px` (de desktopversie is 35px). De klikbare zone telt,
    niet het zichtbare vakje: de checkbox in de boodschappenlijst is zelf 20×20, maar het
    `.shop-checkline`-label eromheen is 44 hoog en dát is wat je raakt.
 

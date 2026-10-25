@@ -7,6 +7,8 @@ const state = {
   historyMonthAnchor: null,
   settings: null,
   customMeals: [],
+  // De lijst is de zwaarste call; die komt pas bij het eerste gebruik (zie ensureCustomMealsLoaded).
+  customMealsLoaded: false,
   selectedCustomMealIds: [],
   profileMenuMode: "ai_only",
   customMealsCount: 0,
@@ -482,12 +484,25 @@ function bindTabs() {
       document.querySelectorAll(".tab-panel").forEach((panel) => panel.classList.remove("active"));
       document.getElementById(`tab-${target}`).classList.add("active");
       localStorage.setItem(activeTabStorageKey, target);
+      laadUitgesteldeAfbeeldingen();
       // Een verborgen paneel heeft hoogte 0, dus daar valt niet te meten of een
       // beschrijving afgekapt wordt. Opnieuw meten zodra de tab zichtbaar is.
       if (target === "my-meals") {
-        toonMeerKnoppen(document.getElementById("custom-meals-list"));
+        ensureCustomMealsLoaded()
+          .then(() => toonMeerKnoppen(document.getElementById("custom-meals-list")))
+          .catch((err) => console.warn("Eigen maaltijden laden mislukt:", err));
       }
     });
+  });
+}
+
+/* Afbeeldingen die in de HTML met data-src staan, krijgen hun src pas als hun
+   tab opent. loading="lazy" volstaat daar niet: bij het parsen is het dashboard
+   nog even de actieve tab, en dan start de browser het laden toch. */
+function laadUitgesteldeAfbeeldingen() {
+  document.querySelectorAll(".tab-panel.active img[data-src]").forEach((img) => {
+    img.src = img.dataset.src;
+    img.removeAttribute("data-src");
   });
 }
 
@@ -1172,6 +1187,7 @@ async function loadCustomMeals() {
   if (!res.ok) return;
   const data = await res.json();
   state.customMeals = data.items || [];
+  state.customMealsLoaded = true;
   state.customMealsCount = state.customMeals.length;
   updateProfileMenuModeOptions();
   state.selectedCustomMealIds = state.customMeals
@@ -1179,6 +1195,23 @@ async function loadCustomMeals() {
     .filter((mealId) => prevSelected.has(mealId));
   renderCustomMeals();
   updateCustomMealDeleteButton();
+}
+
+/* De eigen maaltijden zijn met afstand de zwaarste call bij het opstarten
+   (honderden recepten met ingredienten), en in de winkel heb je ze niet nodig.
+   Daarom worden ze pas geladen bij het eerste gebruik: de tab "Mijn maaltijden"
+   of de keuzedialoog in de planner. Mutaties roepen loadCustomMeals() rechtstreeks
+   aan en verversen dus altijd. */
+let customMealsPromise = null;
+
+function ensureCustomMealsLoaded() {
+  if (state.customMealsLoaded) return Promise.resolve();
+  if (!customMealsPromise) {
+    customMealsPromise = loadCustomMeals().finally(() => {
+      customMealsPromise = null;
+    });
+  }
+  return customMealsPromise;
 }
 
 const courseLabels = {
@@ -1333,6 +1366,7 @@ function renderCustomMeals() {
     link.className = "menu-card-link";
     link.href = `/meal/${encodeURIComponent(meal.id)}?person_count=${encodeURIComponent(String(getPersonCount()))}`;
     const img = document.createElement("img");
+    img.loading = "lazy";
     img.src = mealImageFor(meal);
     img.alt = meal.name;
     bindImageFallback(img, meal);
@@ -1907,16 +1941,24 @@ function renderCalendar() {
 /* Dialoog om zelf een gerecht voor een dag te kiezen. */
 let mealPickerDate = null;
 
-function openMealPicker(datum) {
+async function openMealPicker(datum) {
   mealPickerDate = datum;
   const dialog = document.getElementById("meal-picker");
   document.getElementById("meal-picker-title").textContent =
     `Kies een gerecht voor ${weekdayName(datum)} ${formatDateEu(datum)}`;
   const zoek = document.getElementById("meal-picker-search");
   zoek.value = "";
-  renderMealPickerList("");
+  const lijst = document.getElementById("meal-picker-list");
+  if (!state.customMealsLoaded) lijst.innerHTML = "<li class='muted'>Maaltijden laden...</li>";
   dialog.showModal();
   zoek.focus();
+  try {
+    await ensureCustomMealsLoaded();
+  } catch (err) {
+    lijst.innerHTML = "<li class='muted'>Maaltijden konden niet geladen worden.</li>";
+    return;
+  }
+  renderMealPickerList(zoek.value);
 }
 
 function renderMealPickerList(zoekterm) {
@@ -1996,6 +2038,7 @@ function renderMenuGallery() {
         card.href = `/meal/${encodeURIComponent(item.meal_id)}?date=${encodeURIComponent(formatDateEu(item.date))}&person_count=${encodeURIComponent(String(getPersonCount()))}`;
       }
       const img = document.createElement("img");
+      img.loading = "lazy";
       img.src = mealImageFor(item);
       img.alt = item.meal_name;
       bindImageFallback(img, item);
@@ -2035,7 +2078,7 @@ function renderPlan() {
       if (detailUrl) wrapper.href = detailUrl;
       const badge = isAiGeneratedMeal(item) ? `<span class="ai-badge plan-ai-badge">✦ AI</span>` : "";
       wrapper.innerHTML = `
-        <img alt="${item.meal_name}" />
+        <img alt="${item.meal_name}" loading="lazy" />
         <div class="plan-content">
           <div class="plan-title">
             <span class="plan-date">${formatDateEu(item.date)}</span>
@@ -2048,7 +2091,8 @@ function renderPlan() {
       `;
       const img = wrapper.querySelector("img");
       if (img) {
-        img.src = mealImageFor(item);
+        img.loading = "lazy";
+      img.src = mealImageFor(item);
         bindImageFallback(img, item);
       }
       li.appendChild(wrapper);
@@ -2429,6 +2473,9 @@ async function boot() {
   if (savedTab) {
     activateTab(savedTab);
   }
+  // Zonder bewaarde tab is het dashboard al actief zonder klik; ook dan moet de
+  // hero-afbeelding geladen worden.
+  laadUitgesteldeAfbeeldingen();
   setDefaultDates();
 
   // Elke stap apart afgeschermd. Offline in de winkel faalt onvermijdelijk een
@@ -2438,7 +2485,9 @@ async function boot() {
   await bootStep("session", fetchSession);
   await bootStep("boodschappenlijst", loadShoppingList);
   await bootStep("profiel", fetchProfileSettings);
-  await bootStep("eigen maaltijden", loadCustomMeals);
+  // Geen loadCustomMeals hier: die lijst komt pas bij het eerste gebruik, zie
+  // ensureCustomMealsLoaded(). Staat "Mijn maaltijden" open, dan heeft de
+  // tabklik hierboven hem al in gang gezet.
   await bootStep("kalender", loadCalendar);
   await bootStep("geschiedenis", loadHistoryCalendar);
   await bootStep("admin AI", loadAdminAiSettings);

@@ -13,7 +13,7 @@
   <link rel="apple-touch-icon" href="/static/icon-192.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="/static/styles.css?v=20260809v7" />
+  <link rel="stylesheet" href="/static/styles.css?v=20261025v8" />
 </head>
 <body>
   <div class="app-layout">
@@ -127,7 +127,10 @@
                 <button class="btn btn-ghost" id="hero-shopping-btn" type="button">Open boodschappen</button>
               </div>
             </div>
-            <img class="hero-image" src="https://images.unsplash.com/photo-1540189549336-e6e99c3679fe?auto=format&fit=crop&w=900&q=80" alt="Menu inspiratie" />
+            <!-- data-src in plaats van src: de parser ziet dit paneel als actief nog voor
+                 app.js de bewaarde tab terugzet, en zou de foto anders ook in de winkel
+                 laden. laadUitgesteldeAfbeeldingen() vult src in zodra de tab opent. -->
+            <img class="hero-image" data-src="https://images.unsplash.com/photo-1540189549336-e6e99c3679fe?auto=format&fit=crop&w=900&q=80" alt="Menu inspiratie" />
           </article>
 
           <aside class="side-card card">
@@ -601,6 +604,6 @@
   </div>
 
   <script src="/static/recipe-view.js?v=20260809v7"></script>
-  <script src="/static/app.js?v=20260809v7"></script>
+  <script src="/static/app.js?v=20261025v8"></script>
 </body>
 </html>

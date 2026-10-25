@@ -14,6 +14,8 @@ Credentials komen uitsluitend uit de omgeving. Zet ze nooit in dit bestand.
 
 import os
 
+from datetime import date
+
 import pytest
 
 playwright_api = pytest.importorskip(
@@ -211,10 +213,62 @@ def test_geen_horizontale_overflow_op_mobiel(mobile_page, tab):
     """Zijwaarts scrollen maakt de app onbruikbaar met één hand."""
     mobile_page.locator(f".tab[data-tab='{tab}']").first.click()
     mobile_page.wait_for_timeout(600)
-    overflow = mobile_page.evaluate(
-        "document.documentElement.scrollWidth - document.documentElement.clientWidth"
-    )
+    overflow = _horizontale_overflow(mobile_page)
     assert overflow <= 2, f"tab '{tab}': {overflow}px horizontale overflow op 390px breed"
+
+
+# html en body hebben overflow-x: hidden. Daardoor is scrollWidth van het document
+# altijd gelijk aan de viewport, ook als de inhoud er ver buiten valt; de gebruiker
+# kan er dan niet eens naartoe scrollen. Meet daarom op de inhoud zelf.
+_OVERFLOW_JS = """() => {
+  const vw = document.documentElement.clientWidth;
+  let rechts = vw;
+  for (const el of document.body.querySelectorAll('*')) {
+    const r = el.getBoundingClientRect();
+    if (r.width > 0 && r.right > rechts) rechts = r.right;
+  }
+  return Math.round(Math.max(rechts, document.body.scrollWidth) - vw);
+}"""
+
+
+def _horizontale_overflow(page):
+    return page.evaluate(_OVERFLOW_JS)
+
+
+DETAILPAGINAS = ["meal", "account", "shopping-history"]
+
+
+@requires_credentials
+@pytest.mark.parametrize("pagina", DETAILPAGINAS)
+def test_detailpagina_heeft_geen_overflow_op_mobiel(mobile_page, pagina):
+    """De losse pagina's laden app.js niet en vallen buiten de tab-tests.
+
+    De maaltijd-detailpagina was 519px breed op een scherm van 390px, zonder dat
+    iemand het zag: overflow-x: hidden verborg het, en de tab-tests kwamen er niet.
+    """
+    if pagina == "meal":
+        url = mobile_page.evaluate(
+            "(() => { const a = document.querySelector('a[href^=\"/meal/\"]'); return a && a.getAttribute('href'); })()"
+        )
+        if not url:
+            pytest.skip("geen maaltijdlink zichtbaar in deze toestand")
+    elif pagina == "account":
+        url = f"/account/{EMAIL}"
+    else:
+        url = f"/shopping-history/{date.today().isoformat()}"
+    response = mobile_page.goto(f"{BASE_URL}{url}", wait_until="networkidle", timeout=30000)
+    assert response.status == 200, f"{url} gaf {response.status}"
+    overflow = _horizontale_overflow(mobile_page)
+    assert overflow <= 2, f"{url}: {overflow}px horizontale overflow op 390px breed"
+    if pagina == "meal":
+        # Bewerkmodus toont textarea's en extra knoppen; die mogen ook niet uitsteken.
+        knop = mobile_page.locator("#detail-edit-btn")
+        if knop.is_enabled():
+            knop.click()
+            mobile_page.wait_for_timeout(300)
+            overflow = _horizontale_overflow(mobile_page)
+            assert overflow <= 2, f"{url} in bewerkmodus: {overflow}px horizontale overflow"
+    mobile_page.goto(BASE_URL, wait_until="networkidle", timeout=30000)
 
 
 @requires_credentials
@@ -282,6 +336,12 @@ def test_onderste_navigatiebalk_is_aanraakbaar(mobile_page):
         ("shopping", "#shopping-refresh-btn"),
         ("planner", ".checkline"),
         ("planner", ".retry-btn"),
+        ("planner", "#generate-btn"),
+        ("dashboard", "#hero-generate-btn"),
+        ("dashboard", "#hero-shopping-btn"),
+        ("my-meals", "#cm-save-btn"),
+        ("my-meals", "#cm-import-btn"),
+        ("profile", "#save-profile-btn"),
         ("history", ".history-nav-btn"),
     ],
 )
@@ -330,3 +390,38 @@ def test_geen_console_errors(page, console_errors):
         page.locator(f".tab[data-tab='{tab}']").first.click()
         page.wait_for_timeout(400)
     assert not console_errors, "console errors: " + " | ".join(sorted(set(console_errors))[:5])
+
+
+@requires_credentials
+def test_eigen_maaltijden_laden_pas_bij_gebruik(mobile_page):
+    """In de winkel open je de boodschappenlijst. De zwaarste call, alle eigen
+    recepten met ingredienten, hoort dan niet mee te komen; pas bij
+    "Mijn maaltijden" of de keuzedialoog wordt hij opgehaald."""
+    mobile_page.evaluate("localStorage.setItem('active_tab', 'shopping')")
+    verzoeken = []
+    handler = lambda request: verzoeken.append(request.url)
+    mobile_page.on("request", handler)
+    try:
+        mobile_page.goto(BASE_URL, wait_until="networkidle", timeout=30000)
+        te_vroeg = [url for url in verzoeken if "/api/custom-meals" in url]
+        assert not te_vroeg, "eigen maaltijden werden al bij het opstarten geladen"
+        with mobile_page.expect_response(lambda r: "/api/custom-meals" in r.url, timeout=15000) as antwoord:
+            mobile_page.locator(".tab[data-tab='my-meals']").first.click()
+        assert antwoord.value.status == 200
+        assert mobile_page.locator("#custom-meals-list .menu-card, #custom-meals-list .muted").first.is_visible()
+    finally:
+        mobile_page.remove_listener("request", handler)
+        mobile_page.evaluate("localStorage.removeItem('active_tab')")
+
+
+@requires_credentials
+def test_maaltijdenlijst_api_laat_bereiding_weg(page):
+    """De bereiding is ruim de helft van de payload en wordt in de lijst niet gebruikt."""
+    data = page.request.get(f"{BASE_URL}/api/custom-meals").json()
+    items = data.get("items") or []
+    if not items:
+        pytest.skip("geen eigen maaltijden in deze omgeving")
+    assert all("preparation" not in item for item in items)
+    assert all("ingredients" in item for item in items), "ingredienten zijn nodig voor zoeken"
+    volledig = page.request.get(f"{BASE_URL}/api/custom-meals?include_preparation=1").json()
+    assert any("preparation" in item for item in volledig["items"])

@@ -106,6 +106,10 @@ def _client_ip():
     return (request.remote_addr or "onbekend").strip().lower()
 
 
+def _is_truthy(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _require_auth():
     user = session.get("user")
     if not user:
@@ -1857,7 +1861,15 @@ def register_routes(app):
     @app.get("/api/custom-meals")
     def api_custom_meals_get():
         user = _require_auth()
-        return jsonify({"items": _custom_recipes_for_user(user["email"])})
+        items = _custom_recipes_for_user(user["email"])
+        # De lijst dient voor kaarten, zoeken en kiezen; daar wordt de bereiding
+        # nergens gebruikt, terwijl ze ruim de helft van de payload is. Op een
+        # smartphone in de winkel telt dat. De detailpagina rendert de bereiding
+        # server-side; wie ze toch via de API wil, vraagt ze expliciet.
+        if not _is_truthy(request.args.get("include_preparation")):
+            for item in items:
+                item.pop("preparation", None)
+        return jsonify({"items": items})
 
     @app.get("/api/custom-meals/export")
     def api_custom_meals_export():

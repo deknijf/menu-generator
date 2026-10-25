@@ -3381,7 +3381,30 @@ a.history-day-meal:hover {
   /* Portie-pijltjes zijn primaire bediening; die moeten ruim raakbaar zijn. */
   .servings-arrow {
     width: 3rem;
-    height: 2.4rem;
+    height: 2.75rem;
+  }
+
+  /* Elke knop minstens 44px hoog. De basis-.btn is 35px, en dat zijn precies de
+     knoppen die je met een duim raakt: "Genereer maaltijden", "Opslaan", "Gekocht".
+     inline-flex zodat ook <a class="btn"> een hoogte krijgt; :not([hidden]) omdat
+     een display-regel anders het hidden-attribuut overrulet. */
+  .btn:not([hidden]),
+  .pager-btn:not([hidden]) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+  }
+
+  /* "Meer" op een maaltijdkaart is een tekstknop; de padding is het raakvlak. */
+  .menu-card-more {
+    min-height: 44px;
+    padding: 0.6rem 0.4rem 0.6rem 0;
+  }
+
+  .detail-star-btn {
+    min-width: 44px;
+    min-height: 44px;
   }
 
   .detail-card-head {
@@ -3411,6 +3434,43 @@ a.history-day-meal:hover {
   .prep-step-body p,
   .prep-step-body li {
     font-size: 1.02rem;
+  }
+
+  /* Detailpagina van een maaltijd. De desktop-layout heeft een vaste fotokolom
+     van 320px en een kopregel zonder wrap; op 390px werd de pagina daardoor
+     519px breed. body heeft overflow-x: hidden, dus je kon niet eens scrollen:
+     "Bewerken" en de rechterrand van het formulier vielen gewoon buiten bereik. */
+  .detail-shell {
+    padding: 0.65rem;
+  }
+
+  .detail-top {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .detail-top .btn {
+    white-space: nowrap;
+  }
+
+  .detail-top-actions {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .detail-hero,
+  .detail-grid,
+  .detail-inline,
+  .detail-photo-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-hero img {
+    height: 200px;
+  }
+
+  .detail-card h3 {
+    font-size: 1.5rem;
   }
 }
 
