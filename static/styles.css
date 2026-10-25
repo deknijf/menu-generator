@@ -2692,15 +2692,21 @@ a.history-day-meal:hover {
     min-width: 0;
   }
 
+  /* De klikbare zone is het label, niet het vakje. Een item van een regel is
+     22px hoog; de negatieve marge laat het label de padding van de rij
+     meenemen, zodat de raakzone 44px wordt zonder dat de rij groeit. */
   .shop-checkline {
     gap: 0.62rem;
-    align-items: flex-start;
+    align-items: center;
+    min-height: 44px;
+    margin: -0.7rem 0;
+    padding: 0.7rem 0;
   }
 
   .shop-checkline input[type="checkbox"] {
     width: 22px;
     height: 22px;
-    margin-top: 0.05rem;
+    margin-top: 0;
   }
 
   .shop-text {

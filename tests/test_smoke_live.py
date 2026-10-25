@@ -408,7 +408,8 @@ def test_eigen_maaltijden_laden_pas_bij_gebruik(mobile_page):
         with mobile_page.expect_response(lambda r: "/api/custom-meals" in r.url, timeout=15000) as antwoord:
             mobile_page.locator(".tab[data-tab='my-meals']").first.click()
         assert antwoord.value.status == 200
-        assert mobile_page.locator("#custom-meals-list .menu-card, #custom-meals-list .muted").first.is_visible()
+        kaarten = mobile_page.locator("#custom-meals-list .menu-card, #custom-meals-list .muted")
+        kaarten.first.wait_for(state="visible", timeout=10000)
     finally:
         mobile_page.remove_listener("request", handler)
         mobile_page.evaluate("localStorage.removeItem('active_tab')")
